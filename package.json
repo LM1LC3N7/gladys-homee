@@ -1,6 +1,6 @@
 {
   "name": "gladys-homee",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for homee boxes (Z-Wave, Zigbee, EnOcean), through the local websocket of the box. Unofficial, not affiliated with homee.",
   "type": "module",

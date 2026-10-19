@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-19
+
 ### Added
 
 - The nodes of a homee box (Z-Wave, Zigbee, EnOcean), offered in the Discovery
@@ -58,4 +60,5 @@ the notes of the version's GitHub Release.
   energy index held), a "Test the connection" button that reuses the
   connection in use, English and French texts.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-homee/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-homee/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-homee/releases/tag/v0.1.1
