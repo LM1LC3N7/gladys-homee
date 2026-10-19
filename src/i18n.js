@@ -102,6 +102,11 @@ export const word = (pair, language = 'fr') => pair?.[language] ?? pair?.en ?? '
 
 const kwh = (from, to) => Math.round((to - from) * 1000) / 1000;
 
+/** The kWh a set of holds counts when taken: the jumps only (a drop bills nothing). */
+const kwhOf = (holds) =>
+  Math.round(holds.reduce((sum, h) => sum + (h.direction === 'up' ? h.to - h.from : 0), 0) * 1000) /
+  1000;
+
 const trim = (text) =>
   text.length > LIMITS.badgeMessage ? `${text.slice(0, LIMITS.badgeMessage - 1)}…` : text;
 
@@ -218,27 +223,40 @@ export const T = {
       en: 'State not confirmed after the last command: the device did not report it.',
       fr: "État non confirmé après la dernière commande : l'appareil ne l'a pas signalé.",
     },
-    /** An energy index held back: the kWh waiting for the user. */
-    held: ({ direction, from, to }) =>
-      direction === 'down'
-        ? {
-            en: trim(
-              `Energy index held back: it dropped from ${from} to ${to} kWh. "Accept the held index" in the configuration takes it (nothing billed).`,
-            ),
-            fr: trim(
-              `Index d'énergie retenu : il a baissé de ${from} à ${to} kWh. « Accepter l'index retenu » dans la configuration le prend (rien facturé).`,
-            ),
-          }
-        : {
-            en: trim(
-              `Energy index held back: ${kwh(from, to)} kWh waiting (${from} → ${to} kWh). "Accept the held index" in the configuration counts them.`,
-            ),
-            fr: trim(
-              `Index d'énergie retenu : ${kwh(from, to)} kWh en attente (${from} → ${to} kWh). « Accepter l'index retenu » dans la configuration les compte.`,
-            ),
-          },
+    /**
+     * Every energy index held back on a device, summed up: how many, the kWh
+     * at stake (jumps) and the drops. At most 200 characters.
+     * @param {Array<{ direction, from, to }>} holds
+     */
+    held: (holds) => {
+      const jumps = holds.filter((h) => h.direction === 'up');
+      const drops = holds.length - jumps.length;
+      const total = kwhOf(holds);
+      const parts = {
+        en: [
+          jumps.length > 0 ? `${total} kWh waiting` : '',
+          drops > 0 ? plural(drops, 'drop', 'drops') : '',
+        ]
+          .filter(Boolean)
+          .join(', '),
+        fr: [
+          jumps.length > 0 ? `${total} kWh en attente` : '',
+          drops > 0 ? plural(drops, 'baisse', 'baisses') : '',
+        ]
+          .filter(Boolean)
+          .join(', '),
+      };
+      return {
+        en: trim(
+          `${plural(holds.length, 'energy index', 'energy indexes')} held back (${parts.en}). "Accept the held index" in the configuration, in two clicks, takes them.`,
+        ),
+        fr: trim(
+          `${plural(holds.length, "index d'énergie retenu", "index d'énergie retenus")} (${parts.fr}). « Accepter l'index retenu » dans la configuration, en deux clics, les prend.`,
+        ),
+      };
+    },
   },
-  /** The answers of the "Accept the held index" action. */
+  /** The answers of the "Accept the held index" action (two clicks). */
   accept: {
     noDevice: {
       en: 'Choose the device whose energy index is held back.',
@@ -248,12 +266,25 @@ export const T = {
       en: 'No energy index of this device is held back: nothing to accept.',
       fr: "Aucun index d'énergie de cet appareil n'est retenu : rien à accepter.",
     },
+    /** First click: nothing taken, every hold listed. @param {Array<{ name, direction, from, to }>} holds */
+    confirm: (holds) => {
+      const line = (h, lang) =>
+        h.direction === 'down'
+          ? lang === 'fr'
+            ? `${h.name} : baisse de ${h.from} à ${h.to} kWh (0 kWh)`
+            : `${h.name}: drop from ${h.from} to ${h.to} kWh (0 kWh)`
+          : lang === 'fr'
+            ? `${h.name} : saut de ${h.from} à ${h.to} kWh (${kwh(h.from, h.to)} kWh)`
+            : `${h.name}: jump from ${h.from} to ${h.to} kWh (${kwh(h.from, h.to)} kWh)`;
+      const total = kwhOf(holds);
+      return {
+        en: `Nothing taken yet. Held back: ${holds.map((h) => line(h, 'en')).join('; ')}. Click again within 60 s to take exactly these (${total} kWh counted at once as consumption, a drop bills nothing).`,
+        fr: `Rien n'est pris pour l'instant. Retenus : ${holds.map((h) => line(h, 'fr')).join(' ; ')}. Cliquez à nouveau dans les 60 s pour prendre exactement ceux-ci (${total} kWh comptés d'un coup comme consommation, une baisse ne facture rien).`,
+      };
+    },
+    /** Second click: what was taken. */
     done: (accepted) => {
-      const counted = accepted.reduce(
-        (sum, a) => sum + (a.direction === 'up' ? a.to - a.from : 0),
-        0,
-      );
-      const total = Math.round(counted * 1000) / 1000;
+      const total = kwhOf(accepted);
       return {
         en: `Accepted: ${total} kWh will be counted at once as consumption (plus what the device uses until its next reading); a drop bills nothing. A different value stays held.`,
         fr: `Accepté : ${total} kWh seront comptés d'un coup comme consommation (plus ce que l'appareil consomme d'ici sa prochaine mesure) ; une baisse ne facture rien. Une autre valeur reste retenue.`,

@@ -155,7 +155,9 @@ test('E4 a jump of 5000 kWh is not taken by the next reading; only by the action
   box.emit(123, 5312.5);
   await tick(11_000);
   assert.deepEqual([...new Set(sentOf(gladys, id))], [312.4]);
-  const answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
+  let answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
+  assert.match(answer.data.message.fr, /^Rien n'est pris/);
+  answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
   assert.match(answer.data.message.fr, /^Accepté : 5000\.1 kWh/);
   await tick(11_000);
   assert.equal(gladys.fake.lastState(id), 5312.5);

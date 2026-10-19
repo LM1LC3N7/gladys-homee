@@ -47,9 +47,11 @@ the notes of the version's GitHub Release.
   the test button or a new configuration (the count of refusals kept). A
   429 pauses every path, persisted.
 - Energy indexes guarded like gladys-p1-monitor: never 0, a drop or a jump
-  held (the last value sent again, the kWh waiting on the badge and in the
-  log, kept in `/data`), taken only by the new action "Accept the held
-  index" for the device chosen, which tells the kWh counted. The total of an
+  held (the last value sent again, all the holds of a device summed up on its
+  badge, logged, kept in `/data`), taken only by the new action "Accept the
+  held index", in two clicks: the first lists every index held on the device
+  chosen and the kWh at stake, a second within 60 s takes exactly that list
+  (listed again if it changed) and tells the kWh counted. The total of an
   energy meter is a plain value, so the energy of the plugs is never counted
   twice.
 - Transport badges (box unreachable, node unavailable, state not confirmed,

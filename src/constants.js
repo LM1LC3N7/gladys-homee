@@ -245,6 +245,10 @@ export const TIMINGS = {
   impulseDebounce: 2000,
   /** A read that came too late: no fresh read of that attribute is trusted for this long. */
   quarantine: 5000,
+  /** "Accept the held index": the second click must come within this delay of the first. */
+  acceptConfirm: 60_000,
+  /** The reference of an index guard is written to /data at most this often (a hold at once). */
+  indexWriteEvery: 60_000,
   /** A TCP probe telling a refused token from a network failure of the websocket. */
   probeTimeout: 3000,
 };

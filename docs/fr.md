@@ -105,10 +105,15 @@ l'intégration P1 Monitor :
   renvoyée, le badge de l'appareil affiche les kWh en attente, et le journal
   le signale ; la retenue est gardée dans `/data`, même après un redémarrage ;
 - elle n'est jamais confirmée par répétition ni par le temps : seule l'action
-  **« Accepter l'index retenu »** de la configuration, pour l'appareil choisi,
-  la prend — exactement la valeur affichée, plus ce que l'appareil peut
-  consommer d'ici sa prochaine mesure — et répond avec les kWh comptés ;
-  enregistrer la configuration ou une reconnexion n'accepte jamais rien ;
+  **« Accepter l'index retenu »** de la configuration la prend, **en deux
+  clics**. Le premier clic ne prend rien : il liste tous les index retenus de
+  l'appareil choisi (fonctionnalité, baisse ou saut, de → à, kWh). Un second
+  clic dans les 60 s prend exactement cette liste — chaque valeur affichée,
+  plus ce que l'appareil peut consommer d'ici sa prochaine mesure — et répond
+  avec les kWh comptés ; si la liste a changé entre-temps, elle est listée à
+  nouveau. Le badge de l'appareil résume toutes ses retenues (leur nombre et
+  les kWh en jeu). Enregistrer la configuration ou une reconnexion n'accepte
+  jamais rien ;
 - un appareil ajouté à nouveau repart d'une garde neuve ;
 - le **total** d'un compteur d'énergie (qui peut compter aussi les prises de
   la box) est une valeur simple, jamais un index : l'énergie des prises n'est

@@ -70,6 +70,8 @@ export class StateStore {
     /** indexes: feature external id -> { last, held } of its IndexGuard (src/guard.js) */
     this.data = { salt: undefined, refused: undefined, pausedUntil: 0, indexes: {} };
     this.cache = new Map();
+    /** index states changed in memory, not written yet */
+    this.dirty = false;
     this.load();
     if (!this.data.salt) {
       this.data.salt = randomBytes(16).toString('hex');
@@ -118,6 +120,7 @@ export class StateStore {
       const file = join(this.dir, 'state.json');
       writeFileSync(`${file}.tmp`, JSON.stringify(this.data));
       renameSync(`${file}.tmp`, file);
+      this.dirty = false;
     } catch (err) {
       this.logger?.warn(`Cannot write ${this.dir}/state.json: ${err.code ?? 'error'}`);
     }
@@ -178,7 +181,8 @@ export class StateStore {
     return Object.hasOwn(this.data.indexes, featureId) ? this.data.indexes[featureId] : undefined;
   }
 
-  setIndexState(featureId, state) {
+  /** `write: false`: kept in memory until the next `flush()` (grouped writes). */
+  setIndexState(featureId, state, { write = true } = {}) {
     if (
       !Object.hasOwn(this.data.indexes, featureId) &&
       Object.keys(this.data.indexes).length >= INDEX_STATES_MAX
@@ -186,7 +190,18 @@ export class StateStore {
       return;
     }
     this.data.indexes[featureId] = { last: point(state?.last), held: heldOf(state?.held) };
-    this.save();
+    if (write) {
+      this.save();
+    } else {
+      this.dirty = true;
+    }
+  }
+
+  /** Writes what `setIndexState(…, { write: false })` kept in memory. */
+  flush() {
+    if (this.dirty) {
+      this.save();
+    }
   }
 
   dropIndexStates(prefix) {

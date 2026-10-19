@@ -182,11 +182,21 @@ up to date at the end of every milestone.
   kept in `/data/state.json` (`indexes`, validated, bounded to 1000 ids of
   ours, a held value dated at its loading). Never 0; a drop or a jump is
   held, never confirmed by repetition nor time: the last accepted value is
-  sent again, the hold is logged and shown on the badge of the device (the
-  kWh waiting). Only the action "Accept the held index" (a device chosen,
-  bounded per index to the value shown plus the margin since) takes it, and
-  answers with the kWh counted; saving the configuration or a reconnection
-  never accepts. A device created again starts its guards afresh. Only
+  sent again, the hold is logged and the badge of the device sums up all its
+  holds (how many, the kWh at stake, 200 characters at most). Only the action
+  "Accept the held index" takes it, in two clicks (approval round 1, like
+  gladys-hubitat): the first takes nothing and lists every hold of the device
+  chosen (feature, direction, from → to, kWh); a second within 60 s takes
+  exactly that set if its fingerprint is the same (featureId plus
+  `up:from:threshold` for a jump, `down:from` for a drop: a reset meter that
+  counts again stays one hold) and each value is still the one listed (a
+  jump between its listed `to` and `to` + 25 kW × time since; a drop at most
+  `to` + that margin), else it lists again. It answers with the kWh counted;
+  saving the configuration or a reconnection never accepts. A hold is
+  written to `/data` at once, a new reference alone at most once a minute;
+  the keys of the log and of `/data` use the same identity of a hold (no
+  flood during a durable drop). A node message without `options` keeps the
+  direction known. A device created again starts its guards afresh. Only
   created devices are guarded (nothing is billed otherwise). Never
   `publishEnergyConsumption`.
 - **No double count** (review M9): `TOTAL_ACCUMULATED_ENERGY_USE` (the total

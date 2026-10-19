@@ -469,7 +469,8 @@ test('energy index: a drop or a jump is held, shown on the badge, the last value
     .filter((e) => e.device_external_id === plug.external_id)
     .at(-1);
   assert.equal(badge.degraded, true);
-  assert.equal(badge.message.fr, T.badge.held({ direction: 'up', from: 312.4, to: 5000 }).fr);
+  assert.equal(badge.message.fr, T.badge.held([{ direction: 'up', from: 312.4, to: 5000 }]).fr);
+  assert.match(badge.message.fr, /^1 index d'énergie retenu \(4687\.6 kWh en attente\)/);
   box.emit(123, 312.6);
   await tick(TIMINGS.flushInterval * 11);
   assert.deepEqual([...new Set(sent())], [312.4, 312.6]);
@@ -492,6 +493,13 @@ test('accept the held index: bounded to the device chosen and the value shown, k
   await gladys.fake.configUpdated({ ...CONFIG });
   await tick(TIMINGS.flushInterval * 11);
   assert.equal(gladys.fake.lastState(id), 312.4);
+  answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
+  assert.match(
+    answer.data.message.en,
+    /^Nothing taken yet\. Held back: .*jump from 312\.4 to 412\.4 kWh \(100 kWh\)/,
+  );
+  await tick(TIMINGS.flushInterval * 11);
+  assert.equal(gladys.fake.lastState(id), 312.4, 'the first click takes nothing');
   answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
   assert.match(answer.data.message.en, /^Accepted: 100 kWh will be counted/);
   await tick(TIMINGS.flushInterval * 11);

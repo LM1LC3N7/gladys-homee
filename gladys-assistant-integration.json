@@ -226,8 +226,8 @@
       "timeout_seconds": 30,
       "label": { "en": "Accept the held index", "fr": "Accepter l'index retenu" },
       "description": {
-        "en": "Only when the badge of a device shows an energy index held back (a jump or a drop) and it is right: takes exactly the value shown, for that device only. A jump is then counted at once as consumption; a drop bills nothing. Saving the configuration or a reconnection never accepts it.",
-        "fr": "Seulement quand le badge d'un appareil affiche un index d'énergie retenu (un saut ou une baisse) et qu'il est juste : prend exactement la valeur affichée, pour cet appareil seulement. Un saut est alors compté d'un coup comme consommation ; une baisse ne facture rien. Enregistrer la configuration ou une reconnexion ne l'accepte jamais."
+        "en": "In two clicks, only when the badge of a device shows energy indexes held back (jumps or drops) and they are right. The first click takes nothing: it lists every index held on the device and the kWh at stake. A second click within 60 s takes exactly that list, for that device only; if it changed, it is listed again. A jump is then counted at once as consumption; a drop bills nothing. Saving the configuration or a reconnection never accepts it.",
+        "fr": "En deux clics, seulement quand le badge d'un appareil affiche des index d'énergie retenus (sauts ou baisses) et qu'ils sont justes. Le premier clic ne prend rien : il liste tous les index retenus de l'appareil et les kWh en jeu. Un second clic dans les 60 s prend exactement cette liste, pour cet appareil seulement ; si elle a changé, elle est listée à nouveau. Un saut est alors compté d'un coup comme consommation ; une baisse ne facture rien. Enregistrer la configuration ou une reconnexion ne l'accepte jamais."
       },
       "fields": [
         {

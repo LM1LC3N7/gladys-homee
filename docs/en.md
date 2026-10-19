@@ -102,9 +102,13 @@ integration does:
   badge of the device shows the kWh waiting, and the log says so; the hold is
   kept in `/data`, even across a restart;
 - it is never confirmed by repetition nor by time: only the **"Accept the
-  held index"** action of the configuration, for the device chosen, takes it
-  — exactly the value shown, plus what the device may draw until its next
-  reading — and answers with the kWh counted; saving the configuration or a
+  held index"** action of the configuration takes it, **in two clicks**. The
+  first click takes nothing: it lists every index held on the device chosen
+  (feature, drop or jump, from → to, kWh). A second click within 60 s takes
+  exactly that list — each value shown, plus what the device may draw until
+  its next reading — and answers with the kWh counted; if the list changed
+  meanwhile, it is listed again. The badge of the device sums up all its
+  holds (how many, the kWh at stake). Saving the configuration or a
   reconnection never accepts anything;
 - a device added again starts from a fresh guard;
 - the **total** of an energy meter (which may also count the plugs of the

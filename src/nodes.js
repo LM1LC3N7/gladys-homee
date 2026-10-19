@@ -49,10 +49,10 @@ const int = (v) => {
 };
 
 /**
- * One attribute of the JSON, or undefined. `full`: it comes in a whole node
- * (GET:all, a node message), where an attribute without `options` is not
- * reversed; a lone attribute message without `options` says nothing of its
- * direction (`reversed` undefined: the app keeps the one it knows).
+ * One attribute of the JSON, or undefined. `full`: it comes in GET:all, where
+ * an attribute without `options` is not reversed; a lone attribute or node
+ * message without `options` says nothing of its direction (`reversed`
+ * undefined: the app keeps the one it knows).
  */
 export function attributeOf(raw, at = 0, { full = false } = {}) {
   if (!raw || typeof raw !== 'object') {
@@ -94,7 +94,7 @@ export function attributeOf(raw, at = 0, { full = false } = {}) {
 }
 
 /** One node of the JSON, or undefined. */
-export function nodeOf(raw, at = 0) {
+export function nodeOf(raw, at = 0, { full = true } = {}) {
   if (!raw || typeof raw !== 'object') {
     return undefined;
   }
@@ -105,7 +105,7 @@ export function nodeOf(raw, at = 0) {
   const attributes = new Map();
   const list = Array.isArray(raw.attributes) ? raw.attributes : [];
   for (const entry of list.slice(0, LIMITS.attributesPerNode)) {
-    const attribute = attributeOf(entry, at, { full: true });
+    const attribute = attributeOf(entry, at, { full });
     if (attribute && attribute.nodeId === id && !attributes.has(attribute.id)) {
       attributes.set(attribute.id, attribute);
     }

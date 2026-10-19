@@ -31,7 +31,15 @@
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
 import { OPTION_OF_KIND, normalizeConfig } from './config.js';
-import { HOMEE, INDEX_MAX_KW, LIMITS, NODE_STATE, TIMINGS, WARNING } from './constants.js';
+import {
+  HOMEE,
+  INDEX_MAX_KW,
+  INDEX_SLACK_KWH,
+  LIMITS,
+  NODE_STATE,
+  TIMINGS,
+  WARNING,
+} from './constants.js';
 import { buildModel, emptyModel } from './devices.js';
 import { IndexGuard } from './guard.js';
 import { HomeeError, requestToken } from './homee.js';
@@ -54,6 +62,15 @@ const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 const sameConfig = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const credentialsOf = (c) => JSON.stringify([c.host, c.username, c.password]);
+
+/**
+ * What identifies a hold: a jump by where it started and its threshold, a
+ * drop by where it started only (its threshold follows every lower reading:
+ * a meter reset that counts again must stay one hold, in the log, in /data
+ * and for the two clicks of the acceptance).
+ */
+export const holdKey = (held) =>
+  held.direction === 'down' ? `down:${held.from}` : `up:${held.from}:${held.threshold}`;
 
 /** A number for a PUT: no exponent, at most 4 decimals. */
 export const formatNumber = (n) => String(Number(Number(n).toFixed(4)));
@@ -150,6 +167,11 @@ export class HomeeApp {
     /** index feature id -> IndexGuard; and the last state saved of each */
     this.indexGuards = new Map();
     this.savedIndexes = new Map();
+    /** the writes of the index references are grouped (TIMINGS.indexWriteEvery) */
+    this.indexWrittenAt = -Infinity;
+    this.indexTimer = undefined;
+    /** device id -> the first click of "Accept the held index": { fingerprint, at } */
+    this.pendingAccepts = new Map();
     /** feature id -> last value read, sent when the user creates the device */
     this.lastValues = new Map();
     this.created = new Set();
@@ -260,6 +282,10 @@ export class HomeeApp {
     }
     this.pending.clear();
     this.readBackTimers.clear();
+    if (this.indexTimer) {
+      // The references waiting for their grouped write: written now.
+      this.flushIndexes();
+    }
     this.timer = undefined;
     this.resyncTimer = undefined;
     this.modelTimer = undefined;
@@ -627,11 +653,19 @@ export class HomeeApp {
 
   onNode(generation, raw) {
     this.seq += 1;
-    const node = nodeOf(raw, this.seq);
-    if (!node || node.attributes.size === 0) {
+    const read = nodeOf(raw, this.seq, { full: false });
+    if (!read || read.attributes.size === 0) {
       return;
     }
-    const known = this.nodes.get(node.id);
+    const known = this.nodes.get(read.id);
+    // A node message without `options` keeps the direction known (GET:all);
+    // an attribute never seen is not reversed.
+    const attributes = new Map();
+    for (const [id, a] of read.attributes) {
+      const kept = withDirection(a, known?.attributes.get(id));
+      attributes.set(id, kept.reversed === undefined ? { ...kept, reversed: false } : kept);
+    }
+    const node = { ...read, attributes };
     const shape = (n) => JSON.stringify([n.name, n.profile, [...n.attributes.keys()].sort()]);
     this.nodes.set(node.id, node);
     if (!known || shape(known) !== shape(node)) {
@@ -782,7 +816,7 @@ export class HomeeApp {
       const held = guard.held;
       if (held) {
         this.warnOnce(
-          `held:${featureId}:${held.direction}:${held.from}:${held.threshold}`,
+          `held:${featureId}:${holdKey(held)}`,
           `${featureId}: energy index ${held.direction === 'down' ? 'drop' : 'jump'} held back (${held.from} -> ${held.to} kWh): the "Accept the held index" action takes it`,
         );
       }
@@ -790,32 +824,57 @@ export class HomeeApp {
         this.record(featureId, { state: guard.last.value });
       }
     }
-    if (wasHeld !== Boolean(guard.held)) {
+    if (wasHeld || guard.held) {
+      // The badge sums every hold of the device (deduplicated when unchanged).
       this.publishTransportOf(nodeId);
     }
   }
 
-  /** Keeps a guard in /data when its reference or its value held changed. */
+  /**
+   * Keeps a guard in /data: a hold (or its end) is written at once, a new
+   * reference alone at most once a minute (a plug reports every few seconds).
+   */
   saveIndex(featureId, guard) {
     const state = guard.state();
-    const key = JSON.stringify([
-      state.last,
-      state.held && {
-        direction: state.held.direction,
-        from: state.held.from,
-        threshold: state.held.threshold,
-      },
-    ]);
-    if (this.savedIndexes.get(featureId) === key) {
+    const heldKey = state.held ? holdKey(state.held) : '';
+    const saved = this.savedIndexes.get(featureId);
+    const lastKey = JSON.stringify(state.last);
+    if (saved && saved.held === heldKey && saved.last === lastKey) {
       return;
     }
-    this.savedIndexes.set(featureId, key);
-    this.store.setIndexState(featureId, state);
+    const now = this.now();
+    const urgent = !saved || saved.held !== heldKey;
+    this.store.setIndexState(featureId, state, { write: false });
+    if (urgent || now - this.indexWrittenAt >= TIMINGS.indexWriteEvery) {
+      this.flushIndexes();
+    } else if (!this.indexTimer) {
+      this.indexTimer = this.timers.setTimeout(
+        () => this.flushIndexes(),
+        TIMINGS.indexWriteEvery - (now - this.indexWrittenAt),
+      );
+    }
+    this.savedIndexes.set(featureId, { held: heldKey, last: lastKey });
+  }
+
+  /** Writes the index states kept in memory to /data. */
+  flushIndexes() {
+    this.timers.clearTimeout(this.indexTimer);
+    this.indexTimer = undefined;
+    this.indexWrittenAt = this.now();
+    this.store.flush();
   }
 
   /** The guards of a device's indexes. */
   guardsOf(deviceId) {
     return [...this.indexGuards.entries()].filter(([id]) => id.startsWith(`${deviceId}:`));
+  }
+
+  /** Every index held on a device: [{ featureId, direction, from, to, threshold }], sorted. */
+  heldOf(deviceId) {
+    return this.guardsOf(deviceId)
+      .filter(([, guard]) => guard.held)
+      .map(([featureId, guard]) => ({ featureId, ...guard.held }))
+      .sort((a, b) => (a.featureId < b.featureId ? -1 : 1));
   }
 
   /** Keeps the value, and sends it when the device exists in Gladys. */
@@ -853,13 +912,10 @@ export class HomeeApp {
     if (node && node.id !== -1 && node.state !== NODE_STATE.AVAILABLE) {
       return { transport: DEVICE_TRANSPORTS.UNREACHABLE, degraded: true, message: T.badge.offline };
     }
-    const held = this.guardsOf(deviceId).find(([, guard]) => guard.held);
-    if (held) {
-      return {
-        transport: DEVICE_TRANSPORTS.LOCAL,
-        degraded: true,
-        message: T.badge.held(held[1].held),
-      };
+    // Every hold of the device, summed up (how many, the kWh at stake).
+    const holds = this.heldOf(deviceId);
+    if (holds.length > 0) {
+      return { transport: DEVICE_TRANSPORTS.LOCAL, degraded: true, message: T.badge.held(holds) };
     }
     if (this.unconfirmed.has(nodeId)) {
       return { transport: DEVICE_TRANSPORTS.LOCAL, degraded: true, message: T.badge.unconfirmed };
@@ -1236,22 +1292,66 @@ export class HomeeApp {
   // --- Configuration screen buttons ---------------------------------------------------
 
   /**
-   * "Accept the held index": takes, for each index of the device chosen, the
-   * value held as shown now (plus what the device may draw until its next
-   * reading, src/guard.js), never anything else. Answers with the kWh counted.
+   * "Accept the held index", in two clicks (like gladys-hubitat). The first
+   * one takes nothing: it lists every index held on the device chosen (its
+   * feature, direction, from → to, kWh). A second click within
+   * TIMINGS.acceptConfirm takes exactly that set, if the holds are still the
+   * same (featureId:direction:from:threshold of all of them); otherwise it is
+   * a first click again. Each one is taken as shown now (plus what the device
+   * may draw until its next reading, src/guard.js), never anything else.
    */
   async acceptHeldIndex(fields = {}) {
     const deviceId = typeof fields?.device === 'string' ? fields.device : '';
     if (!deviceId) {
       return T.accept.noDevice;
     }
+    const holds = this.heldOf(deviceId);
+    if (holds.length === 0) {
+      this.pendingAccepts.delete(deviceId);
+      return T.accept.nothing;
+    }
+    const nameOf = (featureId) =>
+      (this.gladys.devices ?? [])
+        .flatMap((d) => d.features ?? [])
+        .find((f) => f.external_id === featureId)?.name ?? featureId;
+    const fingerprint = holds.map((h) => `${h.featureId}:${holdKey(h)}`).join('|');
+    const pending = this.pendingAccepts.get(deviceId);
+    const now = this.now();
+    // The second click never counts more than what was listed: each value
+    // held must still be the one listed, plus what the device may have drawn
+    // since (a jump not below it, a drop not above it plus that margin).
+    const margin = (since) =>
+      (INDEX_MAX_KW * Math.max(0, now - since)) / 3_600_000 + INDEX_SLACK_KWH;
+    const asListed = (h) => {
+      const listed = pending.listed.get(h.featureId);
+      if (!listed) {
+        return false;
+      }
+      const top = listed.to + margin(listed.at);
+      return h.direction === 'up' ? h.to >= listed.to && h.to <= top : h.to <= top;
+    };
+    if (
+      !pending ||
+      pending.fingerprint !== fingerprint ||
+      now - pending.at > TIMINGS.acceptConfirm ||
+      now < pending.at ||
+      !holds.every(asListed)
+    ) {
+      this.pendingAccepts.set(deviceId, {
+        fingerprint,
+        at: now,
+        listed: new Map(holds.map((h) => [h.featureId, { to: h.to, at: now }])),
+      });
+      return T.accept.confirm(holds.map((h) => ({ ...h, name: nameOf(h.featureId) })));
+    }
+    this.pendingAccepts.delete(deviceId);
     const accepted = [];
-    for (const [id, guard] of this.guardsOf(deviceId)) {
-      const taken = guard.acceptHeld();
+    for (const { featureId } of holds) {
+      const taken = this.indexGuards.get(featureId)?.acceptHeld();
       if (taken) {
         accepted.push(taken);
         this.logger.info(
-          `${id}: energy index ${taken.direction === 'down' ? 'drop' : 'jump'} accepted by the user`,
+          `${featureId}: energy index ${taken.direction === 'down' ? 'drop' : 'jump'} from ${taken.from} to ${taken.to} kWh accepted by the user`,
         );
       }
     }
