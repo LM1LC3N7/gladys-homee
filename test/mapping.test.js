@@ -54,8 +54,8 @@ test('kinds: what decides the safety rules', () => {
   assert.deepEqual(kinds, {
     homee: 'box',
     Plafonnier: 'light',
-    'Interrupteur cuisine': 'other',
-    'Prise congélateur': 'plug',
+    'Interrupteur cuisine': 'relay',
+    'Prise congélateur': 'other',
     'Volet salon': 'cover',
     'Porte de garage': 'door',
     'Serrure entrée': 'lock',
@@ -113,20 +113,24 @@ test('locks, doors, valves, sirens, heaters: read-only states and buttons of the
   const lock = mapped(15);
   assert.equal(feature(lock, 'a151').read_only, true);
   assert.deepEqual(
-    Object.entries(lock.writers).map(([k, w]) => [k, w.kind, w.guard]),
+    Object.entries(lock.writers).map(([k, w]) => [k, w.kind, w.confirm, w.protective === true]),
     [
-      ['a151-lock', 'lock', 'lock'],
-      ['a151-unlock', 'lock', 'lock'],
-      ['a151-open', 'lock', 'lock'],
+      ['a151-lock', 'lock', 'lock', true],
+      ['a151-unlock', 'lock', 'lock', false],
+      ['a151-open', 'lock', 'lock', false],
     ],
   );
   const door = mapped(14);
   assert.equal(feature(door, 'a141').category, C.OPENING_SENSOR);
-  assert.deepEqual(Object.keys(door.writers), ['a141-open', 'a141-close', 'a141-stop']);
+  assert.deepEqual(Object.keys(door.writers), ['a141-stop', 'a141-open', 'a141-close']);
   assert.ok(Object.values(door.writers).every((w) => w.kind === 'door'));
+  assert.equal(door.writers['a141-stop'].protective, true);
+  assert.equal(door.writers['a141-close'].directional, true);
   const valve = mapped(18);
   assert.deepEqual(Object.keys(valve.writers), ['a181-open', 'a181-close']);
   assert.equal(valve.writers['a181-close'].kind, 'valve');
+  assert.equal(valve.writers['a181-close'].protective, true);
+  assert.equal(valve.writers['a181-open'].protective, undefined);
   const radiator = mapped(16);
   assert.deepEqual(
     Object.keys(radiator.writers),
@@ -148,7 +152,11 @@ test('locks, doors, valves, sirens, heaters: read-only states and buttons of the
 test('plans decided on the fresh attribute: lock, door, hot water, mode', () => {
   const lockAttr = nodes.get(15).attributes.get(151);
   const lock = mapped(15).writers;
-  assert.deepEqual(lock['a151-lock'].plan(lockAttr, 1), { already: true });
+  // Locking is protective: always sent, even when already locked.
+  assert.equal(lock['a151-lock'].plan(lockAttr, 1).target, 1);
+  assert.deepEqual(lock['a151-unlock'].plan({ ...lockAttr, current: 0, target: 0 }, 1), {
+    already: true,
+  });
   const plan = lock['a151-unlock'].plan(lockAttr, 1);
   assert.equal(plan.target, 0);
   assert.throws(() => lock['a151-unlock'].plan({ ...lockAttr, target: 0 }, 1), /moving/);

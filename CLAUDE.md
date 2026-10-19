@@ -39,7 +39,9 @@ src/nodes.js                      the JSON of the box -> nodes and attributes (p
 src/mapping.js                    one node -> features, readers, writers (pure), the safety kinds
 src/devices.js                    nodes -> Gladys devices + routing tables (pure), no lost feature
 src/publisher.js                  states within 300/min, sensor throttling
-src/store.js                      /data/state.json: refused credentials (fingerprint), 429 pause
+src/guard.js                      IndexGuard (from gladys-p1-monitor): the energy indexes billed
+src/store.js                      /data/state.json: refused credentials (fingerprint), 429 pause,
+                                  index guards
 src/config.js                     DEFAULTS (mirrors the manifest defaults) + normalization
 src/i18n.js                       texts in English and French
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
@@ -51,9 +53,18 @@ test/                             node --test, against the SDK's fake Gladys, a 
 
 ## Safety rules of this integration
 
-- A plug, a heating, a lock, a door or gate, a valve, a siren or the alarm
-  never gets a `switch`/`light` binary feature: "turn everything off" (Google
-  Home, Alexa, HomeKit, MCP, scenes) must never reach them. Their state is
+- Only lights and the plain wall relays of `RELAY_PROFILES` (16, 18, 29, 50)
+  get a `switch`/`light` binary feature or a writable dimmer. A plug, a
+  metering relay, any other profile, a heating, a lock, a door or gate, a
+  valve, a siren or the alarm never does: "turn everything off" (Google Home,
+  Alexa, HomeKit, MCP, scenes) must never reach them.
+- Energy indexes (`ACCUMULATED_ENERGY_USE`) go through `src/guard.js`
+  (IndexGuard of gladys-p1-monitor, taken as is): never 0, drops and jumps
+  held, accepted only by the `accept_held_index` action. A meter's total is a
+  plain value (no double count).
+- Protective commands (lock, close the valve, stop, turn off, stop the
+  siren) are never refused for the state; the command queue of a node is
+  released as soon as its PUT left (the echo is awaited outside). Their state is
   read-only (`unknown/binary`, `lock/state`, `siren/binary`…) and their
   commands are `button/push` features (a `text/select` for the homee mode).
 - Each such command has a `kind` whose option (`allow_*_control`) is off by
@@ -64,9 +75,9 @@ test/                             node --test, against the SDK's fake Gladys, a 
   read does not come, the attribute or the node is unavailable, the value is
   unknown or moving. Its echo is awaited: without it, "sent, without
   confirmation", never "not sent".
-- Locks, doors and valves are guarded after a command until they report the
-  state asked for (never lifted on the start state without a move seen, nor
-  on an unknown value); impulses for 10 s.
+- Nothing blocks a device after a command: locks, doors and valves await
+  the state asked for, a "state not confirmed" badge until a state is
+  reported; two presses of an impulse within 2 s are one.
 - Hot water setpoint ≤ `water_heater_max` (55 °C by default), never above
   60 °C. Radiator valves are never commanded.
 - Refused credentials: stopped, persisted, retried spaced (1 h doubling to

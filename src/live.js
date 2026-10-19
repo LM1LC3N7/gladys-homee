@@ -9,6 +9,7 @@
 // The token is in the URL: this URL is never logged nor put in an error.
 // -----------------------------------------------------------------------------
 
+import net from 'node:net';
 import { HOMEE, LIMITS, TIMINGS } from './constants.js';
 import { hostForUrl } from './homee.js';
 
@@ -63,6 +64,7 @@ export function openSocket({
   timeout = TIMINGS.socketTimeout,
   onMessage = () => {},
   onClose = () => {},
+  probe = probePort,
 }) {
   return new Promise((resolve, reject) => {
     if (typeof WebSocket !== 'function') {
@@ -139,22 +141,50 @@ export function openSocket({
         onMessage(message);
       }
     });
-    ws.addEventListener('close', (event) => {
-      // A refusal of the token ends the handshake: no "open", a close code.
-      const code = Number(event?.code);
-      finish(
-        ready ? 'connection closed' : 'refused',
-        ready
-          ? undefined
-          : new LiveError(
-              'refused',
-              `the box closed the websocket${code ? ` (code ${code})` : ''}`,
-            ),
-      );
-    });
-    ws.addEventListener('error', () => {
-      const reason = ready ? 'connection lost' : 'connection failed';
-      finish(reason, new LiveError(ready ? 'network' : 'refused', reason));
-    });
+    /**
+     * A failure before the opening: Node's WebSocket tells a refused token (an
+     * HTTP 401 to the upgrade) and an unreachable box the same way (code
+     * 1006). A TCP probe of the port tells them apart: the port answers, the
+     * box refused the websocket ("refused": the token may be renewed); it does
+     * not, a network failure (the token is kept).
+     */
+    const failed = () => {
+      if (done || ready) {
+        finish(ready ? 'connection lost' : 'connection failed');
+        return;
+      }
+      done = true;
+      timers.clearTimeout(openTimer);
+      try {
+        ws.close();
+      } catch {
+        // Already closed.
+      }
+      Promise.resolve(probe({ host, port }))
+        .catch(() => false)
+        .then((reachable) =>
+          reject(
+            reachable
+              ? new LiveError('refused', 'the box refused the websocket')
+              : new LiveError('network', 'cannot reach the websocket of the box'),
+          ),
+        );
+    };
+    ws.addEventListener('close', failed);
+    ws.addEventListener('error', failed);
+  });
+}
+
+/** Whether the port of the box accepts a TCP connection (a few seconds at most). */
+export function probePort({ host, port }) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    const end = (ok) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(TIMINGS.probeTimeout, () => end(false));
+    socket.once('connect', () => end(true));
+    socket.once('error', () => end(false));
   });
 }

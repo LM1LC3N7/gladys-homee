@@ -12,10 +12,13 @@
 
 import { LIMITS } from './constants.js';
 
-/** decodeURIComponent that never throws (a lone "%" leaves the text as it is). */
+/**
+ * decodeURIComponent that never throws (a lone "%" leaves the text as it is).
+ * Like Python's unquote (pyHomee), a "+" stays a "+".
+ */
 function unescaped(raw) {
   try {
-    return decodeURIComponent(raw.replace(/\+/g, ' '));
+    return decodeURIComponent(raw);
   } catch {
     return raw;
   }
@@ -45,8 +48,13 @@ const int = (v) => {
   return n !== undefined && Number.isInteger(n) ? n : undefined;
 };
 
-/** One attribute of the JSON, or undefined. */
-export function attributeOf(raw, at = 0) {
+/**
+ * One attribute of the JSON, or undefined. `full`: it comes in a whole node
+ * (GET:all, a node message), where an attribute without `options` is not
+ * reversed; a lone attribute message without `options` says nothing of its
+ * direction (`reversed` undefined: the app keeps the one it knows).
+ */
+export function attributeOf(raw, at = 0, { full = false } = {}) {
   if (!raw || typeof raw !== 'object') {
     return undefined;
   }
@@ -60,6 +68,12 @@ export function attributeOf(raw, at = 0) {
   const min = finite(raw.minimum);
   const max = finite(raw.maximum);
   const options = raw.options && typeof raw.options === 'object' ? raw.options : undefined;
+  const says = options !== undefined && Object.hasOwn(options, 'reverse_control_ui');
+  const reversed = says
+    ? options.reverse_control_ui === true || options.reverse_control_ui === 1
+    : full
+      ? false
+      : undefined;
   return {
     id,
     nodeId,
@@ -73,7 +87,7 @@ export function attributeOf(raw, at = 0) {
     unit: decode(raw.unit, 20),
     editable: raw.editable === 1 || raw.editable === true,
     state: int(raw.state) ?? 1,
-    reversed: options?.reverse_control_ui === true || options?.reverse_control_ui === 1,
+    reversed,
     data: decode(raw.data, 200),
     at,
   };
@@ -91,7 +105,7 @@ export function nodeOf(raw, at = 0) {
   const attributes = new Map();
   const list = Array.isArray(raw.attributes) ? raw.attributes : [];
   for (const entry of list.slice(0, LIMITS.attributesPerNode)) {
-    const attribute = attributeOf(entry, at);
+    const attribute = attributeOf(entry, at, { full: true });
     if (attribute && attribute.nodeId === id && !attributes.has(attribute.id)) {
       attributes.set(attribute.id, attribute);
     }
@@ -134,8 +148,15 @@ export function settingsOf(raw) {
 /** The node with one attribute replaced (records are replaced, never mutated). */
 export function withAttribute(node, attribute) {
   const attributes = new Map(node.attributes);
-  attributes.set(attribute.id, attribute);
+  attributes.set(attribute.id, withDirection(attribute, node.attributes.get(attribute.id)));
   return { ...node, attributes };
+}
+
+/** An attribute that says nothing of its direction keeps the one known (GET:all). */
+export function withDirection(attribute, known) {
+  return attribute.reversed === undefined && known?.reversed !== undefined
+    ? { ...attribute, reversed: known.reversed }
+    : attribute;
 }
 
 /**

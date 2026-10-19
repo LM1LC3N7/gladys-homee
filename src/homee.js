@@ -81,7 +81,8 @@ export function requestToken({
     device_type: String(HOMEE.deviceType),
     device_app: String(HOMEE.deviceApp),
   }).toString();
-  const basic = Buffer.from(`${username}:${hashPassword(password)}`, 'utf8').toString('base64');
+  // HTTP Basic in latin-1, like aiohttp's BasicAuth (pyHomee) encodes it by default.
+  const basic = Buffer.from(`${username}:${hashPassword(password)}`, 'latin1').toString('base64');
   return new Promise((resolve, reject) => {
     let settled = false;
     const done = (fn, value) => {

@@ -13,9 +13,11 @@ Gladys les pilote à travers elle.
 ## Ce qui est pris en charge
 
 - **Lumières** : marche/arrêt, luminosité, température de couleur.
-- **Interrupteurs** (relais muraux) : marche/arrêt, variateur.
-- **Prises** : état, puissance, énergie (index cumulatif), et des boutons
-  « Allumer » / « Éteindre » derrière une option (voir plus bas).
+- **Interrupteurs muraux simples** (profils « interrupteur marche/arrêt »,
+  double, avec entrée, Wi-Fi) : marche/arrêt, variateur.
+- **Prises, relais avec mesure et tout autre appareil** : état, puissance,
+  énergie (index cumulatif), et des boutons « Allumer » / « Éteindre »
+  derrière une option (voir plus bas).
 - **Volets roulants** : ouvrir, fermer, arrêter, position.
 - **Thermostats et têtes thermostatiques** : température, consigne, ouverture
   de la vanne, batterie, mode de chauffage (lecture).
@@ -23,12 +25,14 @@ Gladys les pilote à travers elle.
 - **Capteurs** : ouverture, fenêtre, mouvement, présence, fuite et inondation,
   fumée, monoxyde de carbone, sabotage, batterie faible, température,
   humidité, luminosité, CO2, UV, vent, pluie, courant, tension.
-- **Serrures, portes de garage, portails, moteurs de fenêtre, relais à
-  impulsion, vannes d'eau, sirènes, mode du homee** : état en lecture seule,
-  et des boutons (ou une liste pour le mode) qui ne fonctionnent que si vous
-  les autorisez.
+- **Serrures, portes de garage, portails, relais à impulsion, vannes d'eau,
+  sirènes, mode du homee** : état en lecture seule, et des boutons (ou une
+  liste pour le mode) qui ne fonctionnent que si vous les autorisez. En v1,
+  les boutons Ouvrir / Fermer / Arrêter existent seulement pour les portes de
+  garage et les portails d'entrée motorisés ; les autres portes et les
+  moteurs de fenêtre montrent leur état, leurs boutons d'impulsion restent.
 - Les télécommandes et boutons muraux (appuis), les homeegrammes et l'alarme
-  INOVA ne sont pas encore repris.
+  INOVA (toujours en lecture seule) ne sont pas encore repris.
 
 ## Configuration
 
@@ -47,40 +51,75 @@ la connexion locale de la box (port 7681), jamais my.hom.ee.
 ## Sécurité : ce qui reste en lecture seule
 
 Un « tout éteindre » (Google Home, Alexa, HomeKit, MCP, une scène) ne doit
-jamais atteindre une vanne, une serrure, une sirène, un chauffage ni la charge
-inconnue d'une prise. Ces appareils n'ont donc **jamais d'interrupteur** dans
-Gladys : leur état est en lecture seule et leurs commandes sont des boutons,
-refusés tant que l'option correspondante est désactivée (toutes le sont par
-défaut) :
+jamais atteindre une vanne, une serrure, une sirène, un chauffage ni une
+charge inconnue. Seuls les lumières et les interrupteurs muraux simples ont
+donc un interrupteur dans Gladys ; tous les autres appareils ont un état en
+lecture seule et des boutons, refusés tant que l'option correspondante est
+désactivée (toutes le sont par défaut) :
 
 | Option                                       | Ce qu'elle autorise                                                                   |
 | -------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Autoriser le pilotage des prises             | Boutons Allumer / Éteindre des prises                                                 |
+| Autoriser le pilotage des prises             | Boutons Allumer / Éteindre des prises, des relais avec mesure et des autres appareils |
 | Autoriser le pilotage du chauffage           | Consignes des thermostats et de l'eau chaude, marche/arrêt des radiateurs électriques |
 | Autoriser le pilotage des serrures           | Verrouiller, Déverrouiller, Ouvrir (tirer le pêne)                                    |
-| Autoriser le pilotage des portes et portails | Ouvrir, Fermer, Arrêter, impulsions                                                   |
+| Autoriser le pilotage des portes et portails | Ouvrir, Fermer, Arrêter (portes de garage, portails d'entrée), impulsions             |
 | Autoriser le pilotage des vannes             | Ouvrir / Fermer les vannes d'eau                                                      |
 | Autoriser le pilotage des sirènes            | Déclencher / Arrêter la sirène                                                        |
 | Autoriser le changement de mode du homee     | À la maison, Nuit, Absent, Vacances (une liste)                                       |
 
 Pour chacune de ces commandes, l'intégration relit l'état de l'appareil juste
-avant, refuse si cet état est inconnu ou en mouvement, vérifie l'option une
-dernière fois juste avant l'envoi, et attend que la box confirme. Sans
-confirmation dans les temps, Gladys affiche « Commande envoyée, sans
-confirmation du homee » : vérifiez l'appareil. Une serrure, une porte ou une
-vanne est ensuite protégée jusqu'à ce qu'elle signale l'état demandé (30 s,
-90 s ou 60 s au plus). Une commande qui ne peut pas partir dans les 3,5 s est
+avant, refuse si cet état est inconnu ou en mouvement (une porte dont la cible
+diffère de sa position est en mouvement), vérifie l'option une dernière fois
+juste avant l'envoi, et attend que la box confirme. Sans confirmation dans
+les temps, Gladys affiche « Commande envoyée, sans confirmation du homee » :
+vérifiez l'appareil.
+
+Les commandes **protectrices** — verrouiller, fermer la vanne, arrêter une
+porte, éteindre, arrêter la sirène — ne sont jamais refusées à cause de l'état
+de l'appareil et partent toujours (une fuite pendant l'ouverture d'une vanne
+doit pouvoir la refermer). Aucune commande n'attend derrière la confirmation
+d'une autre. Une serrure, une porte ou une vanne qui ne signale pas l'état
+demandé à temps (30 s, 90 s, 60 s) affiche « État non confirmé » sur son
+badge, jusqu'à ce qu'elle signale un état. Deux appuis sur un bouton
+d'impulsion à moins de 2 s comptent pour un seul. Une porte dont le sens
+(inversé ou non dans homee) est inconnu ou a changé depuis son ajout refuse
+Ouvrir / Fermer. Une commande qui ne peut pas partir dans les 3,5 s est
 refusée, jamais envoyée en retard.
 
 La consigne d'eau chaude est plafonnée à **55 °C** par défaut (risque de
-brûlure), réglable jusqu'à **60 °C** au plus. Les vannes des têtes
-thermostatiques ne sont jamais pilotées directement : elles suivent leur
-consigne.
+brûlure), réglable jusqu'à **60 °C** au plus, y compris la consigne d'un
+circuit d'eau chaude. Toute consigne hors de la plage affichée dans Gladys
+est refusée. Les vannes des têtes thermostatiques ne sont jamais pilotées
+directement : elles suivent leur consigne. Sur une vanne d'eau à marche/arrêt,
+le sens de « marche » (ouverte ou fermée) reste à vérifier sur une vraie box :
+les boutons s'appellent donc « Allumer » / « Éteindre ».
+
+## Énergie
+
+L'énergie cumulée d'une prise ou d'un compteur est un index que Gladys
+facture : chaque hausse est comptée en entier. L'intégration le protège comme
+l'intégration P1 Monitor :
+
+- jamais 0 ; une baisse ou un saut improbable (plus de 25 kW en moyenne
+  depuis la dernière mesure) est **retenu** : la dernière valeur acceptée est
+  renvoyée, le badge de l'appareil affiche les kWh en attente, et le journal
+  le signale ; la retenue est gardée dans `/data`, même après un redémarrage ;
+- elle n'est jamais confirmée par répétition ni par le temps : seule l'action
+  **« Accepter l'index retenu »** de la configuration, pour l'appareil choisi,
+  la prend — exactement la valeur affichée, plus ce que l'appareil peut
+  consommer d'ici sa prochaine mesure — et répond avec les kWh comptés ;
+  enregistrer la configuration ou une reconnexion n'accepte jamais rien ;
+- un appareil ajouté à nouveau repart d'une garde neuve ;
+- le **total** d'un compteur d'énergie (qui peut compter aussi les prises de
+  la box) est une valeur simple, jamais un index : l'énergie des prises n'est
+  pas comptée deux fois.
 
 ## Connexion et erreurs
 
 - Un jeton est demandé à la box à la connexion et gardé en mémoire seulement ;
-  il est renouvelé avant sa fin, jamais en boucle.
+  il est renouvelé avant sa fin, jamais en boucle. Si la box refuse la
+  connexion en direct alors que son port répond, un nouveau jeton est demandé
+  au prochain essai ; une panne réseau garde le jeton.
 - La connexion en direct perdue est rouverte après 5 s, puis 10 s, 20 s…
   jusqu'à 5 minutes entre deux essais. Toute la box est relue toutes les
   10 minutes ; sans réponse en 30 s, la connexion est rouverte.
@@ -88,9 +127,10 @@ consigne.
   (sans le nom d'utilisateur ni le mot de passe, seulement une empreinte
   salée). Nouvel essai automatique après 1 h, puis 2 h, 4 h… jusqu'à 24 h ;
   « Tester la connexion » ou un enregistrement de la configuration essaie
-  aussitôt.
+  aussitôt (les mêmes identifiants refusés encore attendent plus longtemps).
 - Si la box demande de ralentir (HTTP 429), l'intégration fait une pause
   (1 minute à 6 heures), gardée même après un redémarrage.
+- « Tester la connexion » réutilise la connexion en cours quand elle existe.
 
 ## Limites connues
 
@@ -107,3 +147,5 @@ consigne.
   l'intégration homee de Home Assistant, dont le protocole est repris.
 - L'intégration homee de [Home Assistant](https://github.com/home-assistant/core)
   (Apache-2.0), pour la signification des profils et des valeurs.
+- La garde des index d'énergie vient de l'intégration Gladys P1 Monitor
+  ([LM1LC3N7/gladys-p1-monitor](https://github.com/LM1LC3N7/gladys-p1-monitor)).

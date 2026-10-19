@@ -56,6 +56,38 @@ test('retries double up to 24 h; dates far ahead are bounded when read back', (t
   assert.equal(read.pausedUntil, now + TIMINGS.rateLimitMax);
 });
 
+test('index states: validated, only our feature ids, kept across a restart, dropped per device', (t) => {
+  const dir = tempDir(t);
+  const id = 'ext:gladys:homee:0123456789ab-12:a123';
+  writeFileSync(
+    `${dir}/state.json`,
+    JSON.stringify({
+      indexes: {
+        [id]: {
+          last: { value: 312.4, at: 5 },
+          held: { direction: 'up', from: 312.4, to: 5000, threshold: 5000, at: 6 },
+        },
+        'ext:gladys:homee:0123456789ab-13:a1': { last: { value: 0, at: 5 } },
+        'ext:gladys:other:x': { last: { value: 1, at: 5 } },
+        __proto__: { last: { value: 1, at: 5 } },
+        'ext:gladys:homee:bad': { last: { value: 1, at: 5 }, held: { direction: 'sideways' } },
+      },
+    }),
+  );
+  const store = new StateStore({ dir });
+  assert.deepEqual(Object.keys(store.data.indexes).sort(), [id, 'ext:gladys:homee:bad']);
+  assert.equal(store.indexState('ext:gladys:homee:bad').held, null);
+  assert.equal(store.indexState(id).held.to, 5000);
+  assert.equal(store.indexState('toString'), undefined);
+  store.setIndexState(id, { last: { value: 312.5, at: 7 }, held: null });
+  assert.deepEqual(new StateStore({ dir }).indexState(id), {
+    last: { value: 312.5, at: 7 },
+    held: null,
+  });
+  store.dropIndexStates('ext:gladys:homee:0123456789ab-12');
+  assert.equal(new StateStore({ dir }).indexState(id), undefined);
+});
+
 test('an unreadable or hostile file starts empty', (t) => {
   const dir = tempDir(t);
   writeFileSync(

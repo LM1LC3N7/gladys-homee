@@ -13,9 +13,11 @@ controls them through it.
 ## What is supported
 
 - **Lights**: on/off, brightness, colour temperature.
-- **Switches** (wall relays): on/off, dimmer.
-- **Plugs**: state, power, energy (cumulative index), and "Turn on" / "Turn
-  off" buttons behind an option (see below).
+- **Plain wall switches** (the "on/off switch" profiles, double, with input,
+  Wi-Fi): on/off, dimmer.
+- **Plugs, metering relays and any other device**: state, power, energy
+  (cumulative index), and "Turn on" / "Turn off" buttons behind an option
+  (see below).
 - **Roller shutters**: open, close, stop, position.
 - **Thermostats and radiator heads**: temperature, setpoint, valve opening,
   battery, heating mode (read).
@@ -23,11 +25,13 @@ controls them through it.
 - **Sensors**: opening, window, motion, presence, leak and flood, smoke,
   carbon monoxide, tamper, low battery, temperature, humidity, illuminance,
   CO2, UV, wind, rain, current, voltage.
-- **Locks, garage doors, gates, window motors, impulse relays, water valves,
-  sirens, the homee mode**: read-only state, and buttons (or a list for the
-  mode) that work only when you allow them.
-- Remotes and wall buttons (presses), homeegrams and the INOVA alarm are not
-  handled yet.
+- **Locks, garage doors, gates, impulse relays, water valves, sirens, the
+  homee mode**: read-only state, and buttons (or a list for the mode) that
+  work only when you allow them. In v1, the Open / Close / Stop buttons exist
+  for motorised garage doors and entrance gates only; other doors and window
+  motors show their state, their impulse buttons stay.
+- Remotes and wall buttons (presses), homeegrams and the INOVA alarm (always
+  read-only) are not handled yet.
 
 ## Configuration
 
@@ -46,46 +50,84 @@ homee apps do). The integration only uses the local connection of the box
 ## Safety: what stays read-only
 
 A "turn everything off" (Google Home, Alexa, HomeKit, MCP, a scene) must never
-reach a valve, a lock, a siren, a heating or the unknown load of a plug. These
-devices therefore **never get a switch** in Gladys: their state is read-only
-and their commands are buttons, refused while the matching option is off (all
+reach a valve, a lock, a siren, a heating or an unknown load. Only lights and
+plain wall switches therefore get a switch in Gladys; every other device has
+a read-only state and buttons, refused while the matching option is off (all
 are off by default):
 
-| Option                        | What it allows                                                 |
-| ----------------------------- | -------------------------------------------------------------- |
-| Allow plug control            | Turn on / Turn off buttons of plugs                            |
-| Allow heating control         | Thermostat and hot water setpoints, on/off of electric heaters |
-| Allow lock control            | Lock, Unlock, Unlatch                                          |
-| Allow door and gate control   | Open, Close, Stop, impulses                                    |
-| Allow valve control           | Open / Close water valves                                      |
-| Allow siren control           | Sound / Stop the siren                                         |
-| Allow changing the homee mode | Home, Sleeping, Away, Vacation (a list)                        |
+| Option                        | What it allows                                                         |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| Allow plug control            | Turn on / Turn off buttons of plugs, metering relays and other devices |
+| Allow heating control         | Thermostat and hot water setpoints, on/off of electric heaters         |
+| Allow lock control            | Lock, Unlock, Unlatch                                                  |
+| Allow door and gate control   | Open, Close, Stop (garage doors, entrance gates), impulses             |
+| Allow valve control           | Open / Close water valves                                              |
+| Allow siren control           | Sound / Stop the siren                                                 |
+| Allow changing the homee mode | Home, Sleeping, Away, Vacation (a list)                                |
 
 For each of these commands, the integration reads the state of the device just
-before, refuses when that state is unknown or moving, checks the option one
-last time just before sending, and waits for the box to confirm. Without a
-confirmation in time, Gladys shows "Command sent, without confirmation from
-the homee": check the device. A lock, a door or a valve is then guarded until
-it reports the state asked for (30 s, 90 s or 60 s at most). A command that
-cannot leave within 3.5 s is refused, never sent late.
+before, refuses when that state is unknown or moving (a door whose target
+differs from its position is moving), checks the option one last time just
+before sending, and waits for the box to confirm. Without a confirmation in
+time, Gladys shows "Command sent, without confirmation from the homee": check
+the device.
+
+The **protective** commands — lock, close the valve, stop a door, turn off,
+stop the siren — are never refused because of the state of the device and
+are always sent (a leak while a valve opens must be able to close it). No
+command waits behind the confirmation of another. A lock, a door or a valve
+that does not report the state asked for in time (30 s, 90 s, 60 s) shows
+"State not confirmed" on its badge, until it reports a state. Two presses of
+an impulse button less than 2 s apart count as one. A door whose direction
+(reversed or not in homee) is unknown or changed since it was added refuses
+Open / Close. A command that cannot leave within 3.5 s is refused, never sent
+late.
 
 The hot water setpoint is capped at **55 °C** by default (scalding risk),
-adjustable up to **60 °C** at most. The valves of radiator heads are never
-controlled directly: they follow their setpoint.
+adjustable up to **60 °C** at most, the setpoint of a warm water circuit
+included. Any setpoint outside the range shown in Gladys is refused. The
+valves of radiator heads are never controlled directly: they follow their
+setpoint. On an on/off water valve, the meaning of "on" (open or closed) is
+still to be checked on a real box: the buttons are therefore named "Turn on"
+/ "Turn off".
+
+## Energy
+
+The cumulative energy of a plug or a meter is an index Gladys bills: every
+rise is counted in full. The integration guards it like the P1 Monitor
+integration does:
+
+- never 0; a drop or an implausible jump (more than 25 kW on average since
+  the last reading) is **held**: the last accepted value is sent again, the
+  badge of the device shows the kWh waiting, and the log says so; the hold is
+  kept in `/data`, even across a restart;
+- it is never confirmed by repetition nor by time: only the **"Accept the
+  held index"** action of the configuration, for the device chosen, takes it
+  — exactly the value shown, plus what the device may draw until its next
+  reading — and answers with the kWh counted; saving the configuration or a
+  reconnection never accepts anything;
+- a device added again starts from a fresh guard;
+- the **total** of an energy meter (which may also count the plugs of the
+  box) is a plain value, never an index: the energy of the plugs is not
+  counted twice.
 
 ## Connection and errors
 
 - A token is asked from the box when connecting and kept in memory only; it is
-  renewed before its end, never in a loop.
+  renewed before its end, never in a loop. When the box refuses the live
+  connection while its port answers, a new token is asked at the next try; a
+  network failure keeps the token.
 - A lost live connection is opened again after 5 s, then 10 s, 20 s… up to
   5 minutes between two tries. The whole box is read again every 10 minutes;
   without an answer within 30 s, the connection is opened again.
 - **Refused credentials**: the integration stops and notes it in `/data`
   (without the user name or the password, only a salted fingerprint). Next
   automatic try after 1 h, then 2 h, 4 h… up to 24 h; "Test the connection"
-  or saving the configuration tries at once.
+  or saving the configuration tries at once (the same credentials refused
+  again wait longer).
 - If the box asks to slow down (HTTP 429), the integration pauses (1 minute to
   6 hours), kept even across a restart.
+- "Test the connection" reuses the connection in use when there is one.
 
 ## Known limits
 
@@ -100,3 +142,5 @@ controlled directly: they follow their setpoint.
   homee integration of Home Assistant, whose protocol is ported.
 - The homee integration of [Home Assistant](https://github.com/home-assistant/core)
   (Apache-2.0), for the meaning of the profiles and values.
+- The energy index guard comes from the Gladys P1 Monitor integration
+  ([LM1LC3N7/gladys-p1-monitor](https://github.com/LM1LC3N7/gladys-p1-monitor)).

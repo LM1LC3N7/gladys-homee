@@ -62,7 +62,7 @@ const LABELS = {
   power: { en: 'Power', fr: 'Puissance' },
   totalPower: { en: 'Total power', fr: 'Puissance totale' },
   energy: { en: 'Energy', fr: 'Énergie' },
-  totalEnergy: { en: 'Total energy', fr: 'Énergie totale' },
+  totalEnergy: { en: 'Total energy (kWh)', fr: 'Énergie totale (kWh)' },
   current: { en: 'Current', fr: 'Courant' },
   totalCurrent: { en: 'Total current', fr: 'Courant total' },
   voltage: { en: 'Voltage', fr: 'Tension' },
@@ -99,6 +99,8 @@ export const modeName = (key, language = 'fr') => MODES[key]?.[language] ?? MODE
 
 /** One text of a { en, fr } pair, in a language. */
 export const word = (pair, language = 'fr') => pair?.[language] ?? pair?.en ?? '';
+
+const kwh = (from, to) => Math.round((to - from) * 1000) / 1000;
 
 const trim = (text) =>
   text.length > LIMITS.badgeMessage ? `${text.slice(0, LIMITS.badgeMessage - 1)}…` : text;
@@ -216,6 +218,47 @@ export const T = {
       en: 'State not confirmed after the last command: the device did not report it.',
       fr: "État non confirmé après la dernière commande : l'appareil ne l'a pas signalé.",
     },
+    /** An energy index held back: the kWh waiting for the user. */
+    held: ({ direction, from, to }) =>
+      direction === 'down'
+        ? {
+            en: trim(
+              `Energy index held back: it dropped from ${from} to ${to} kWh. "Accept the held index" in the configuration takes it (nothing billed).`,
+            ),
+            fr: trim(
+              `Index d'énergie retenu : il a baissé de ${from} à ${to} kWh. « Accepter l'index retenu » dans la configuration le prend (rien facturé).`,
+            ),
+          }
+        : {
+            en: trim(
+              `Energy index held back: ${kwh(from, to)} kWh waiting (${from} → ${to} kWh). "Accept the held index" in the configuration counts them.`,
+            ),
+            fr: trim(
+              `Index d'énergie retenu : ${kwh(from, to)} kWh en attente (${from} → ${to} kWh). « Accepter l'index retenu » dans la configuration les compte.`,
+            ),
+          },
+  },
+  /** The answers of the "Accept the held index" action. */
+  accept: {
+    noDevice: {
+      en: 'Choose the device whose energy index is held back.',
+      fr: "Choisissez l'appareil dont l'index d'énergie est retenu.",
+    },
+    nothing: {
+      en: 'No energy index of this device is held back: nothing to accept.',
+      fr: "Aucun index d'énergie de cet appareil n'est retenu : rien à accepter.",
+    },
+    done: (accepted) => {
+      const counted = accepted.reduce(
+        (sum, a) => sum + (a.direction === 'up' ? a.to - a.from : 0),
+        0,
+      );
+      const total = Math.round(counted * 1000) / 1000;
+      return {
+        en: `Accepted: ${total} kWh will be counted at once as consumption (plus what the device uses until its next reading); a drop bills nothing. A different value stays held.`,
+        fr: `Accepté : ${total} kWh seront comptés d'un coup comme consommation (plus ce que l'appareil consomme d'ici sa prochaine mesure) ; une baisse ne facture rien. Une autre valeur reste retenue.`,
+      };
+    },
   },
   /** Refusals of a command, by key. */
   denied: {
@@ -279,6 +322,18 @@ export const T = {
     paused: {
       en: 'Refused: the homee asked to slow down, the integration is paused.',
       fr: "Refusé : le homee a demandé de ralentir, l'intégration est en pause.",
+    },
+    directionUnknown: {
+      en: 'Refused: the direction of this door or shutter is not known yet (the homee is read again every 10 minutes). The command was not sent.',
+      fr: "Refusé : le sens de cette porte ou de ce volet n'est pas encore connu (le homee est relu toutes les 10 minutes). La commande n'a pas été envoyée.",
+    },
+    directionChanged: {
+      en: 'Refused: the direction of this door changed in homee since it was added (open and closed swapped): check it, then restart the integration. The command was not sent.',
+      fr: "Refusé : le sens de cette porte a changé dans homee depuis son ajout (ouvert et fermé inversés) : vérifiez-le, puis redémarrez l'intégration. La commande n'a pas été envoyée.",
+    },
+    outOfRange: {
+      en: 'Refused: this setpoint is outside the range of the device in Gladys. The command was not sent.',
+      fr: "Refusé : cette consigne est hors de la plage de l'appareil dans Gladys. La commande n'a pas été envoyée.",
     },
     sentUnconfirmed: {
       en: 'Command sent, without confirmation from the homee yet: check the device in a moment.',

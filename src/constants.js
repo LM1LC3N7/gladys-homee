@@ -11,7 +11,16 @@
 /** Manifest `actions` keys. */
 export const ACTIONS = {
   TEST: 'test_connection',
+  ACCEPT_HELD: 'accept_held_index',
 };
+
+// --- Plausibility of the energy indexes (the values Gladys bills) -------------------
+/** A homee meter or plug never draws more than this on average between two readings. */
+export const INDEX_MAX_KW = 25;
+/** kWh always accepted on top of INDEX_MAX_KW × hours (rounding, a late reading). */
+export const INDEX_SLACK_KWH = 0.5;
+/** Index guards kept in /data at most (one per index feature). */
+export const INDEX_STATES_MAX = 1000;
 
 /** Languages of the feature names (manifest `language` options). */
 export const LANGUAGES = ['fr', 'en'];
@@ -43,7 +52,15 @@ export const PROFILE = {
   HOMEE: 1,
   ON_OFF_PLUG: 10,
   DIMMABLE_METERING_SWITCH: 11,
+  METERING_SWITCH: 12,
   METERING_PLUG: 13,
+  ON_OFF_SWITCH: 16,
+  DOUBLE_ON_OFF_SWITCH: 18,
+  ON_OFF_SWITCH_WITH_BINARY_INPUT: 29,
+  DOUBLE_METERING_SWITCH: 33,
+  WIFI_METERING_SWITCH: 46,
+  WIFI_ON_OFF_METERING_SWITCH: 47,
+  WIFI_ON_OFF_SWITCH: 50,
   DIMMABLE_PLUG: 14,
   DIMMABLE_SWITCH: 15,
   DOUBLE_ON_OFF_PLUG: 28,
@@ -219,8 +236,15 @@ export const TIMINGS = {
   /** A read back of an attribute after a sensitive command (ms after it). */
   readBacks: [3000, 15_000],
   /**
-   * After a lock, door, gate or valve command, the device is guarded: no
-   * other guarded command until it reports the state asked for, or this long.
+   * After a lock, door, gate or valve command, the state asked for is awaited
+   * this long (never blocking another command): not reported in time, the
+   * badge says "state not confirmed" until the device reports a state.
    */
-  guard: { lock: 30_000, door: 90_000, valve: 60_000, impulse: 10_000 },
+  confirm: { lock: 30_000, door: 90_000, valve: 60_000 },
+  /** Two presses of an impulse closer than this are one (a bounce): the second is refused. */
+  impulseDebounce: 2000,
+  /** A read that came too late: no fresh read of that attribute is trusted for this long. */
+  quarantine: 5000,
+  /** A TCP probe telling a refused token from a network failure of the websocket. */
+  probeTimeout: 3000,
 };

@@ -108,8 +108,8 @@
         "fr": "Autoriser le pilotage des prises depuis Gladys"
       },
       "description": {
-        "en": "Off by default: the load behind a plug is unknown (a heater, a freezer…), so a plug is never a switch: its state is read-only and it has \"Turn on\" and \"Turn off\" buttons, which work only when this option is on.",
-        "fr": "Désactivé par défaut : la charge derrière une prise est inconnue (un radiateur, un congélateur…), donc une prise n'est jamais un interrupteur : son état est en lecture seule et elle a des boutons « Allumer » et « Éteindre », qui ne fonctionnent que si cette option est activée."
+        "en": "Off by default: the load behind a plug, a metering relay or any device that is not a light nor a plain wall switch is unknown (a heater, a freezer…), so it is never a switch: its state is read-only and it has \"Turn on\" and \"Turn off\" buttons, which work only when this option is on.",
+        "fr": "Désactivé par défaut : la charge derrière une prise, un relais avec mesure ou tout appareil qui n'est ni une lumière ni un interrupteur mural simple est inconnue (un radiateur, un congélateur…), donc il n'est jamais un interrupteur : son état est en lecture seule et il a des boutons « Allumer » et « Éteindre », qui ne fonctionnent que si cette option est activée."
       },
       "required": false,
       "default": false
@@ -220,6 +220,24 @@
       "key": "test_connection",
       "label": { "en": "Test the connection", "fr": "Tester la connexion" },
       "timeout_seconds": 60
+    },
+    {
+      "key": "accept_held_index",
+      "timeout_seconds": 30,
+      "label": { "en": "Accept the held index", "fr": "Accepter l'index retenu" },
+      "description": {
+        "en": "Only when the badge of a device shows an energy index held back (a jump or a drop) and it is right: takes exactly the value shown, for that device only. A jump is then counted at once as consumption; a drop bills nothing. Saving the configuration or a reconnection never accepts it.",
+        "fr": "Seulement quand le badge d'un appareil affiche un index d'énergie retenu (un saut ou une baisse) et qu'il est juste : prend exactement la valeur affichée, pour cet appareil seulement. Un saut est alors compté d'un coup comme consommation ; une baisse ne facture rien. Enregistrer la configuration ou une reconnexion ne l'accepte jamais."
+      },
+      "fields": [
+        {
+          "key": "device",
+          "type": "select",
+          "source": "devices",
+          "label": { "en": "Device", "fr": "Appareil" },
+          "required": true
+        }
+      ]
     }
   ]
 }

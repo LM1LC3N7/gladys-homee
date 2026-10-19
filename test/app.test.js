@@ -246,7 +246,7 @@ test('a state that cannot be read just now refuses the command, never the memory
   assert.equal(box.puts.length, 0);
 });
 
-test('a lock allowed: unlocked, then guarded until it reports the state asked for', async (t) => {
+test('a lock allowed: unlocked; locking again is protective, sent at once even while it moves', async (t) => {
   const { gladys, box, tick } = await setup(t, ALLOW_ALL, {
     prepare: (b) => {
       b.slow = 5000;
@@ -256,11 +256,10 @@ test('a lock allowed: unlocked, then guarded until it reports the state asked fo
   let ack = await command(gladys, tick, lock, 'a151-unlock', 1);
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(box.puts.at(-1), { node: 15, attr: 151, value: 0 });
-  // The motor has not reported yet: a second command waits.
-  ack = await command(gladys, tick, lock, 'a151-lock', 1);
-  assert.equal(ack.success, false);
-  assert.equal(ack.error, T.denied.busy.fr);
-  await tick(5000);
+  // The motor has not reported yet: unlatching waits (moving)…
+  ack = await command(gladys, tick, lock, 'a151-open', 1);
+  assert.equal(ack.error, T.denied.moving.fr);
+  // …but locking is never refused.
   ack = await command(gladys, tick, lock, 'a151-lock', 1);
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(box.puts.at(-1), { node: 15, attr: 151, value: 1 });
@@ -452,8 +451,9 @@ test('a reconnection to Gladys publishes the status and the Discovery again', as
   assert.equal(box.sessions.length, 1);
 });
 
-test('energy index: a drop or a jump is held, a repetition never confirms a jump', async (t) => {
-  const { gladys, box, tick } = await setup(t);
+test('energy index: a drop or a jump is held, shown on the badge, the last value sent again', async (t) => {
+  const store = new StateStore({ dir: null, now: () => Date.now() });
+  const { gladys, box, tick } = await setup(t, CONFIG, { store });
   const plug = await created(gladys, 'Prise congélateur');
   const id = `${plug.external_id}:a123`;
   await tick(TIMINGS.flushInterval);
@@ -463,10 +463,70 @@ test('energy index: a drop or a jump is held, a repetition never confirms a jump
     box.emit(123, value);
     await tick(TIMINGS.flushInterval * 11);
   }
-  assert.deepEqual(sent(), [312.4]);
+  assert.deepEqual([...new Set(sent())], [312.4], 'only the last accepted value');
+  assert.equal(store.indexState(id).held.to, 5000, 'the hold kept in /data');
+  const badge = gladys.fake.transports
+    .filter((e) => e.device_external_id === plug.external_id)
+    .at(-1);
+  assert.equal(badge.degraded, true);
+  assert.equal(badge.message.fr, T.badge.held({ direction: 'up', from: 312.4, to: 5000 }).fr);
   box.emit(123, 312.6);
   await tick(TIMINGS.flushInterval * 11);
-  assert.deepEqual(sent(), [312.4, 312.6]);
+  assert.deepEqual([...new Set(sent())], [312.4, 312.6]);
+  assert.equal(store.indexState(id).held, null);
+});
+
+test('accept the held index: bounded to the device chosen and the value shown, kWh told', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const plug = await created(gladys, 'Prise congélateur');
+  const id = `${plug.external_id}:a123`;
+  await tick(TIMINGS.flushInterval);
+  box.emit(123, 412.4);
+  await tick(TIMINGS.flushInterval * 11);
+  let answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, {});
+  assert.equal(answer.data.message.en, T.accept.noDevice.en);
+  const lamp = await created(gladys, 'Plafonnier');
+  answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: lamp.external_id });
+  assert.equal(answer.data.message.en, T.accept.nothing.en);
+  // A save of the configuration or a reconnection accepts nothing.
+  await gladys.fake.configUpdated({ ...CONFIG });
+  await tick(TIMINGS.flushInterval * 11);
+  assert.equal(gladys.fake.lastState(id), 312.4);
+  answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
+  assert.match(answer.data.message.en, /^Accepted: 100 kWh will be counted/);
+  await tick(TIMINGS.flushInterval * 11);
+  assert.equal(gladys.fake.lastState(id), 412.4);
+  // Accepted once: a new jump is held again.
+  box.emit(123, 9000);
+  await tick(TIMINGS.flushInterval * 11);
+  assert.equal(gladys.fake.lastState(id), 412.4);
+});
+
+test('a device created again starts its index guard afresh; Gladys holds the reference', async (t) => {
+  const store = new StateStore({ dir: null, now: () => Date.now() });
+  const { gladys, app, box, tick } = await setup(t, CONFIG, { store });
+  const plug = named(gladys, 'Prise congélateur');
+  const id = `${plug.external_id}:a123`;
+  store.setIndexState(id, {
+    last: { value: 9999, at: Date.now() },
+    held: { direction: 'up', from: 9999, to: 99_999, threshold: 99_999, at: Date.now() },
+  });
+  await gladys.fake.deviceCreated(plug);
+  await tick(TIMINGS.flushInterval);
+  assert.equal(gladys.fake.lastState(id), 312.4, 'the old state of a deleted device is dropped');
+  // Gladys holds 312.4 (last_value): after a restart, a 0 never reaches the index.
+  const held = gladys.devices.find((d) => d.external_id === plug.external_id);
+  for (const f of held.features) {
+    if (f.external_id === id) {
+      f.last_value = 312.4;
+      f.last_value_changed = new Date().toISOString();
+    }
+  }
+  app.indexGuards.clear();
+  store.data.indexes = {};
+  box.emit(123, 0);
+  await tick(TIMINGS.flushInterval * 11);
+  assert.ok(!gladys.fake.states.some((s) => s.device_feature_external_id === id && s.state === 0));
 });
 
 test('no lost feature: a feature of the created device missing from a new read is kept', async (t) => {

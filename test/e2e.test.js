@@ -76,6 +76,10 @@ test('a homee, end to end: token, websocket, devices, live states, commands, tes
   sim.drop();
   await waitFor(() => !app.online);
   await waitFor(() => app.online, 8000); // opened again after 5 s
-  assert.equal(sim.tokenRequests.length, 2, 'the app, the test; the token kept on reconnection');
+  assert.equal(
+    sim.tokenRequests.length,
+    1,
+    'the test reuses the connection; the token is kept on reconnection',
+  );
   assert.equal(sim.refusedUpgrades, 0);
 });

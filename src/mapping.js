@@ -15,18 +15,24 @@
 //   readers   [{ key, attr, read(attribute) -> { state } | { text } | null, meter? }]
 //   writers   { [key]: writer }, a writer being either
 //               { attr, write(value, attribute) -> target }           direct
-//               { attr, kind, guard?, plan(fresh, value, ctx) -> plan } sensitive
+//               { attr, kind, plan(attribute, value, ctx) -> plan,
+//                 confirm?, protective?, directional?, impulse? }    sensitive
 //             `kind` names the option that allows it (src/config.js
-//             OPTION_OF_KIND); a sensitive plan is computed on the attribute
-//             read just before, and is { already: true } or
-//             { target, done(attribute), moving?(attribute) },
+//             OPTION_OF_KIND); a plan is computed on the attribute read just
+//             before, and is { already: true } or { target, done?(attribute) }.
+//             `protective` (lock, close the valve, stop, turn off, stop the
+//             siren): never refused for the state, always sent, planned on
+//             the attribute known. `confirm`: the state asked for is awaited
+//             (badge). `directional`: needs the direction of the attribute
+//             (reverse_control_ui) known and unchanged. `impulse`: debounced.
 //   throttled the keys of the measurements (spaced by the sensor interval).
 //
-// Safety: a lock, a door, a gate, a valve, a siren, a heating or an unknown
-// load behind a plug never gets a switch ("turn everything off" of Google
-// Home, Alexa, HomeKit, MCP or a scene must never reach them): their state is
-// read only and their commands are buttons, refused unless the matching
-// option is on.
+// Safety: only lights and the plain wall relays of RELAY_PROFILES get a
+// switch. A lock, a door, a gate, a valve, a siren, a heating, a plug, a
+// metering relay or any other profile never does ("turn everything off" of
+// Google Home, Alexa, HomeKit, MCP or a scene must never reach them): their
+// state is read only and their commands are buttons, refused unless the
+// matching option is on.
 // -----------------------------------------------------------------------------
 
 import {
@@ -40,6 +46,7 @@ import {
   FIRST_UNAVAILABLE_ATTRIBUTE_STATE,
   HOMEE_MODES,
   PROFILE as P,
+  WATER_HEATER_MAX,
 } from './constants.js';
 import { label, modeName } from './i18n.js';
 
@@ -69,13 +76,27 @@ const LIGHT_PROFILES = new Set([
   P.WIFI_DIMMABLE_LIGHT,
   P.WIFI_ON_OFF_DIMMABLE_METERING_SWITCH,
 ]);
-/** Plugs whose load is unknown (a heater, a fridge…): no switch. */
-const PLUG_PROFILES = new Set([
-  P.ON_OFF_PLUG,
-  P.METERING_PLUG,
-  P.DOUBLE_ON_OFF_PLUG,
-  P.WIFI_ON_OFF_METERING_PLUG,
+/**
+ * The only on/off that get a switch outside the lights: plain wall relays.
+ * Every other on/off (plugs, metering relays, cameras, washers, ventilation,
+ * profiles unknown) is read only, with buttons behind the plug option: the
+ * load is unknown, "turn everything off" must not reach it.
+ */
+export const RELAY_PROFILES = new Set([
+  P.ON_OFF_SWITCH,
+  P.DOUBLE_ON_OFF_SWITCH,
+  P.ON_OFF_SWITCH_WITH_BINARY_INPUT,
+  P.WIFI_ON_OFF_SWITCH,
 ]);
+/** Attributes that make a node a heating, whatever its profile. */
+const HEATING_ATTRIBUTES = [
+  ATTR.TARGET_TEMPERATURE,
+  ATTR.WARM_WATER_TARGET_TEMPERATURE,
+  ATTR.WARM_WATER_TEMPERATURE,
+  ATTR.HEATING_MODE,
+];
+/** Doors and gates whose Open / Close / Stop buttons are offered in v1 (Home Assistant's covers). */
+export const DOOR_COMMAND_PROFILES = new Set([P.ENTRANCE_GATE_OPERATOR, P.GARAGE_DOOR_OPERATOR]);
 const COVER_PROFILES = new Set([
   P.SHUTTER_POSITION_SWITCH,
   P.ELECTRIC_MOTOR_METERING_SWITCH,
@@ -119,15 +140,30 @@ const IMPULSES = new Set([
   ATTR.VENTILATE_IMPULSE,
 ]);
 
-/** Kinds of nodes whose on/off is never a switch, and the option of their commands. */
-const SENSITIVE_KINDS = new Set(['plug', 'heating', 'lock', 'door', 'valve', 'siren', 'alarm']);
+/** The option kind of the buttons of an on/off, by node kind (other: the unknown load). */
+const BUTTON_KIND = {
+  other: 'plug',
+  cover: 'plug',
+  heating: 'heating',
+  lock: 'lock',
+  door: 'door',
+  valve: 'valve',
+  siren: 'siren',
+};
 
 /**
  * What a node is, for the safety rules:
- * lock | door | valve | siren | alarm | heating | plug | light | cover | box | other.
+ * alarm | box | lock | door | valve | siren | heating | light | cover | relay | other.
+ * `other` is every node whose on/off may drive an unknown load (plugs,
+ * metering relays, any profile not listed): read only, buttons behind the
+ * plug option.
  */
 export function kindOf(node) {
   const types = new Set([...node.attributes.values()].map((a) => a.type));
+  if (node.profile >= 5000 && node.profile < 6000) {
+    // The INOVA alarm system (its sirens included): read only, never commanded.
+    return 'alarm';
+  }
   if (node.id === -1 || node.profile === P.HOMEE) {
     return 'box';
   }
@@ -143,21 +179,17 @@ export function kindOf(node) {
   if (SIREN_PROFILES.has(node.profile) || types.has(ATTR.SIREN)) {
     return 'siren';
   }
-  if (node.profile >= 5000 && node.profile < 6000) {
-    // The INOVA alarm system: read only, never commanded.
-    return 'alarm';
-  }
-  if (HEATING_PROFILES.has(node.profile)) {
+  if (HEATING_PROFILES.has(node.profile) || HEATING_ATTRIBUTES.some((t) => types.has(t))) {
     return 'heating';
-  }
-  if (PLUG_PROFILES.has(node.profile)) {
-    return 'plug';
   }
   if (LIGHT_PROFILES.has(node.profile)) {
     return 'light';
   }
   if (COVER_PROFILES.has(node.profile)) {
     return 'cover';
+  }
+  if (RELAY_PROFILES.has(node.profile)) {
+    return 'relay';
   }
   return 'other';
 }
@@ -322,7 +354,20 @@ class NodeMapper {
     key,
     name,
     spec,
-    { read, attr, write, plan, kind, guard, throttle = false, meter, text } = {},
+    {
+      read,
+      attr,
+      write,
+      plan,
+      kind,
+      confirm,
+      protective,
+      directional,
+      impulse,
+      throttle = false,
+      meter,
+      text,
+    } = {},
   ) {
     if (this.features.some((f) => f.key === key)) {
       return;
@@ -358,7 +403,15 @@ class NodeMapper {
     if (write) {
       this.writers[key] = { attr, write };
     } else if (plan) {
-      this.writers[key] = { attr, kind, plan, ...(guard ? { guard } : {}) };
+      this.writers[key] = {
+        attr,
+        kind,
+        plan,
+        ...(confirm ? { confirm } : {}),
+        ...(protective ? { protective: true } : {}),
+        ...(directional ? { directional: true } : {}),
+        ...(impulse ? { impulse: true } : {}),
+      };
     }
     if (throttle) {
       this.throttled.add(key);
@@ -372,31 +425,39 @@ class NodeMapper {
     }
   }
 
-  /** Buttons for a sensitive on/off: on and off, decided on the state read just before. */
+  /**
+   * Buttons for a sensitive on/off: on decided on the state read just
+   * before; off is protective (it stops the load, the heating, the siren):
+   * never refused, always sent.
+   */
   onOffButtons(a, kind, labels = ['turnOn', 'turnOff']) {
     const [onLabel, offLabel] = labels;
-    // What moves (a lock, a door, a valve) is guarded until it reports the state asked for.
-    const guard = ['lock', 'door', 'valve'].includes(kind) ? kind : undefined;
-    for (const [suffix, target, labelKey] of [
-      ['on', 1, onLabel],
-      ['off', 0, offLabel],
-    ]) {
-      this.add(`a${a.id}-${suffix}`, this.nameOf(labelKey, a), BUTTON, {
-        attr: a.id,
-        kind,
-        guard,
-        plan: (fresh, value) => {
-          NodeMapper.pressed(value);
-          if (!near(fresh.current, 0) && !near(fresh.current, 1)) {
-            throw refusal('unknownState');
-          }
-          if (near(fresh.current, target) && near(fresh.target, target)) {
-            return { already: true };
-          }
-          return { target, done: (x) => near(x.current, target) };
-        },
-      });
-    }
+    const confirm = ['lock', 'door', 'valve'].includes(kind) ? kind : undefined;
+    this.add(`a${a.id}-on`, this.nameOf(onLabel, a), BUTTON, {
+      attr: a.id,
+      kind,
+      confirm,
+      plan: (fresh, value) => {
+        NodeMapper.pressed(value);
+        if (!near(fresh.current, 0) && !near(fresh.current, 1)) {
+          throw refusal('unknownState');
+        }
+        if (near(fresh.current, 1) && near(fresh.target, 1)) {
+          return { already: true };
+        }
+        return { target: 1, done: (x) => near(x.current, 1) };
+      },
+    });
+    this.add(`a${a.id}-off`, this.nameOf(offLabel, a), BUTTON, {
+      attr: a.id,
+      kind,
+      confirm,
+      protective: true,
+      plan: (_known, value) => {
+        NodeMapper.pressed(value);
+        return { target: 0, done: (x) => near(x.current, 0) };
+      },
+    });
   }
 
   // --- Lights and switches --------------------------------------------------------
@@ -421,7 +482,7 @@ class NodeMapper {
       this.hasSwitch = true;
       return;
     }
-    if (!SENSITIVE_KINDS.has(this.kind) && this.kind !== 'box' && a.editable) {
+    if (this.kind === 'relay' && a.editable) {
       this.add(
         `a${a.id}`,
         name,
@@ -431,11 +492,13 @@ class NodeMapper {
       this.hasSwitch = true;
       return;
     }
-    // A plug, a heating, a valve, a siren, a lock, a door or the alarm:
-    // the state read only, and buttons behind the option of the kind.
+    // Anything else (a plug, a metering relay, an unknown profile, a heating,
+    // a valve, a siren, a lock, a door, the alarm): the state read only, and
+    // buttons behind the option of the kind.
     this.add(`a${a.id}`, name, READ_ONLY_ON_OFF, { attr: a.id, read });
-    if (a.editable && this.kind !== 'alarm' && this.kind !== 'box') {
-      this.onOffButtons(a, this.kind);
+    const kind = BUTTON_KIND[this.kind];
+    if (a.editable && kind) {
+      this.onOffButtons(a, kind);
     }
   }
 
@@ -444,7 +507,8 @@ class NodeMapper {
     const spec = light
       ? { category: C.LIGHT, type: T.LIGHT.BRIGHTNESS, min: 0, max: 100 }
       : { category: C.SWITCH, type: T.SWITCH.DIMMER, min: 0, max: 100 };
-    const writable = a.editable && (light || this.kind === 'other');
+    // Same list as the on/off: a dimmer of an unknown load is read only.
+    const writable = a.editable && (light || this.kind === 'relay');
     this.add(`a${a.id}`, this.nameOf('brightness', a), spec, {
       attr: a.id,
       read: (x) => (usable(x) ? { state: toPercent(x) } : null),
@@ -514,7 +578,7 @@ class NodeMapper {
 
   coverState(a) {
     const read = (x) => {
-      if (!usable(x)) {
+      if (!usable(x) || x.reversed === undefined) {
         return null;
       }
       const open = x.reversed ? HOMEE_COVER.CLOSED : HOMEE_COVER.OPEN;
@@ -545,14 +609,17 @@ class NodeMapper {
         write: a.editable
           ? (value, x) => {
               const v = strictNumber(value);
+              if (v === COVER_STATE.STOP) {
+                return HOMEE_COVER.STOPPED;
+              }
+              if (x.reversed === undefined) {
+                throw refusal('directionUnknown');
+              }
               if (v === COVER_STATE.OPEN) {
                 return x.reversed ? HOMEE_COVER.CLOSED : HOMEE_COVER.OPEN;
               }
               if (v === COVER_STATE.CLOSE) {
                 return x.reversed ? HOMEE_COVER.OPEN : HOMEE_COVER.CLOSED;
-              }
-              if (v === COVER_STATE.STOP) {
-                return HOMEE_COVER.STOPPED;
               }
               throw refusal('badValue');
             }
@@ -588,12 +655,20 @@ class NodeMapper {
   doorState(a) {
     const homeeOpen = (x) => (x.reversed ? HOMEE_COVER.CLOSED : HOMEE_COVER.OPEN);
     const homeeClosed = (x) => (x.reversed ? HOMEE_COVER.OPEN : HOMEE_COVER.CLOSED);
+    // Moving: opening, closing, or a target the door has not reached yet.
     const moving = (x) =>
-      [HOMEE_COVER.OPENING, HOMEE_COVER.CLOSING].includes(Math.round(x.current));
+      [HOMEE_COVER.OPENING, HOMEE_COVER.CLOSING].includes(Math.round(x.current)) ||
+      !near(x.current, x.target);
     this.add(`a${a.id}`, this.nameOf('door', a), binarySensor(C.OPENING_SENSOR), {
       attr: a.id,
       read: (x) => {
-        if (!usable(x) || !Number.isInteger(x.current) || x.current < 0 || x.current > 4) {
+        if (
+          !usable(x) ||
+          x.reversed === undefined ||
+          !Number.isInteger(x.current) ||
+          x.current < 0 ||
+          x.current > 4
+        ) {
           return null;
         }
         return {
@@ -602,29 +677,37 @@ class NodeMapper {
         };
       },
     });
-    if (!a.editable) {
+    if (!a.editable || !DOOR_COMMAND_PROFILES.has(this.node.profile)) {
+      // v1: Open / Close / Stop only on garage doors and entrance gates.
       return;
     }
     const known = (x) => Number.isInteger(x.current) && x.current >= 0 && x.current <= 4;
+    // Stop is protective: never refused, always sent (2 is the same both ways).
+    this.add(`a${a.id}-stop`, this.nameOf('stop', a), BUTTON, {
+      attr: a.id,
+      kind: 'door',
+      protective: true,
+      plan: (_known, value) => {
+        NodeMapper.pressed(value);
+        return { target: HOMEE_COVER.STOPPED, done: (x) => !moving(x) };
+      },
+    });
     for (const [suffix, labelKey] of [
       ['open', 'open'],
       ['close', 'close'],
-      ['stop', 'stop'],
     ]) {
       this.add(`a${a.id}-${suffix}`, this.nameOf(labelKey, a), BUTTON, {
         attr: a.id,
         kind: 'door',
-        guard: suffix === 'stop' ? undefined : 'door',
+        confirm: 'door',
+        directional: true,
         plan: (fresh, value) => {
           NodeMapper.pressed(value);
+          if (fresh.reversed === undefined) {
+            throw refusal('directionUnknown');
+          }
           if (!known(fresh)) {
             throw refusal('unknownState');
-          }
-          if (suffix === 'stop') {
-            // Only a moving door has something to stop.
-            return moving(fresh)
-              ? { target: HOMEE_COVER.STOPPED, done: (x) => !moving(x) }
-              : { already: true };
           }
           if (moving(fresh)) {
             throw refusal('moving');
@@ -633,22 +716,23 @@ class NodeMapper {
           if (fresh.current === target) {
             return { already: true };
           }
-          return { target, done: (x) => Math.round(x.current) === target, moving };
+          return { target, done: (x) => Math.round(x.current) === target };
         },
       });
     }
   }
 
   impulse(a) {
-    // A press moves the door, gate or window one step: no state to decide on,
-    // so the device is guarded until its state changes or the guard ends.
+    // A press moves the door, gate or window one step: no state to decide
+    // on. Two presses within 2 s are one bounce (src/app.js); the second
+    // press after that, often the stop, is sent.
     this.add(`a${a.id}`, this.nameOf(IMPULSE_LABELS[a.type] ?? 'impulse', a), BUTTON, {
       attr: a.id,
       kind: 'door',
-      guard: 'door',
+      impulse: true,
       plan: (_fresh, value) => {
         NodeMapper.pressed(value);
-        return { target: 1, done: () => false, impulse: true };
+        return { target: 1 };
       },
     });
   }
@@ -684,10 +768,18 @@ class NodeMapper {
     if (!a.editable) {
       return;
     }
-    const commands = [
-      ['lock', 1, 'lock'],
-      ['unlock', 0, 'unlock'],
-    ];
+    // Locking is protective: never refused, always sent.
+    this.add(`a${a.id}-lock`, this.nameOf('lock', a), BUTTON, {
+      attr: a.id,
+      kind: 'lock',
+      confirm: 'lock',
+      protective: true,
+      plan: (_known, value) => {
+        NodeMapper.pressed(value);
+        return { target: 1, done: (x) => near(x.current, 1) && near(x.target, 1) };
+      },
+    });
+    const commands = [['unlock', 0, 'unlock']];
     if (openValue !== undefined) {
       commands.push(['open', openValue, 'unlatch']);
     }
@@ -699,7 +791,7 @@ class NodeMapper {
       this.add(`a${a.id}-${suffix}`, this.nameOf(labelKey, a), BUTTON, {
         attr: a.id,
         kind: 'lock',
-        guard: 'lock',
+        confirm: 'lock',
         plan: (fresh, value) => {
           NodeMapper.pressed(value);
           if (!near(fresh.current, fresh.target)) {
@@ -712,11 +804,7 @@ class NodeMapper {
           if (suffix !== 'open' && near(fresh.current, target)) {
             return { already: true };
           }
-          return {
-            target,
-            done: (x) => near(x.current, target) && near(x.target, target),
-            moving: (x) => !near(x.current, x.target),
-          };
+          return { target, done: (x) => near(x.current, target) && near(x.target, target) };
         },
       });
     }
@@ -729,7 +817,7 @@ class NodeMapper {
       attr: a.id,
       read: (x) => (usable(x) ? { state: near(x.current, 1) ? 1 : 0 } : null),
     });
-    if (a.editable) {
+    if (a.editable && this.kind === 'siren') {
       this.onOffButtons(a, 'siren', ['sirenOn', 'sirenOff']);
     }
   }
@@ -751,31 +839,34 @@ class NodeMapper {
       // A radiator valve is moved by its thermostat, never directly.
       return;
     }
-    for (const [suffix, labelKey] of [
-      ['open', 'valveOpen'],
-      ['close', 'valveClose'],
-    ]) {
-      this.add(`a${a.id}-${suffix}`, this.nameOf(labelKey, a), BUTTON, {
-        attr: a.id,
-        kind: 'valve',
-        guard: 'valve',
-        plan: (fresh, value) => {
-          NodeMapper.pressed(value);
-          const target = suffix === 'open' ? fresh.max : fresh.min;
-          if (!near(fresh.current, fresh.target)) {
-            throw refusal('moving');
-          }
-          if (near(fresh.current, target)) {
-            return { already: true };
-          }
-          return {
-            target,
-            done: (x) => near(x.current, target),
-            moving: (x) => !near(x.current, x.target),
-          };
-        },
-      });
-    }
+    this.add(`a${a.id}-open`, this.nameOf('valveOpen', a), BUTTON, {
+      attr: a.id,
+      kind: 'valve',
+      confirm: 'valve',
+      plan: (fresh, value) => {
+        NodeMapper.pressed(value);
+        const target = fresh.max;
+        if (!near(fresh.current, fresh.target)) {
+          throw refusal('moving');
+        }
+        if (near(fresh.current, target)) {
+          return { already: true };
+        }
+        return { target, done: (x) => near(x.current, target) };
+      },
+    });
+    // Closing the water is protective: never refused (a leak), always sent.
+    this.add(`a${a.id}-close`, this.nameOf('valveClose', a), BUTTON, {
+      attr: a.id,
+      kind: 'valve',
+      confirm: 'valve',
+      protective: true,
+      plan: (known, value) => {
+        NodeMapper.pressed(value);
+        const target = known?.min ?? a.min;
+        return { target, done: (x) => near(x.current, target) };
+      },
+    });
   }
 
   // --- Climate (setpoints behind the heating option) ---------------------------------
@@ -809,8 +900,8 @@ class NodeMapper {
       ? sensor(
           C.WATER_HEATER,
           T.WATER_HEATER.TARGET_TEMPERATURE,
-          clamp(min, 0, 60),
-          clamp(max, 1, 60),
+          clamp(min, 0, WATER_HEATER_MAX.max),
+          clamp(max, 1, WATER_HEATER_MAX.max),
           U.CELSIUS,
         )
       : sensor(
@@ -835,12 +926,21 @@ class NodeMapper {
             if (celsius === undefined || !freshScale) {
               throw refusal('badValue');
             }
-            if (water && celsius > Math.min(ctx.waterHeaterMax, 60)) {
+            const ceiling = Math.min(ctx.waterHeaterMax, WATER_HEATER_MAX.max);
+            if (water && celsius > ceiling) {
               throw refusal('tooHot');
             }
+            // Never outside the range published (the slider), whatever the box allows.
+            if (celsius < spec.min || celsius > spec.max) {
+              throw refusal('outOfRange');
+            }
             const target = stepped(fromCelsius(celsius, freshScale), fresh);
-            if (water && toCelsius(target, freshScale) > Math.min(ctx.waterHeaterMax, 60)) {
+            const sent = toCelsius(target, freshScale);
+            if (water && sent > ceiling) {
               throw refusal('tooHot');
+            }
+            if (sent < spec.min - 0.5 || sent > spec.max + 0.5) {
+              throw refusal('outOfRange');
             }
             if (near(fresh.current, target) && near(fresh.target, target)) {
               return { already: true };
@@ -978,20 +1078,22 @@ class NodeMapper {
     if (!ENERGY_UNITS[a.unit.toLowerCase()]) {
       return;
     }
-    // A cumulative meter: what the core expects of these types (index rules in src/app.js).
+    const kwh = (x) => {
+      const factor = ENERGY_UNITS[x.unit.toLowerCase()];
+      return factor ? round(x.current * factor, 4) : undefined;
+    };
+    if (a.type === ATTR.TOTAL_ACCUMULATED_ENERGY_USE) {
+      // The total of a meter that may also count the plugs paired to the box:
+      // as an index it would bill their energy twice. A plain value.
+      this.measure(a, 'totalEnergy', sensor(C.UNKNOWN, T.SENSOR.DECIMAL, 0, 1e12, undefined), kwh);
+      return;
+    }
+    // A cumulative meter, what the core bills: through the IndexGuard (src/guard.js, src/app.js).
     const spec = this.hasSwitch
       ? sensor(C.SWITCH, T.SWITCH.ENERGY, 0, 1e12, U.KILOWATT_HOUR)
       : sensor(C.ENERGY_SENSOR, T.ENERGY_SENSOR.INDEX, 0, 1e12, U.KILOWATT_HOUR);
     const key = `a${a.id}`;
-    this.measure(
-      a,
-      a.type === ATTR.TOTAL_ACCUMULATED_ENERGY_USE ? 'totalEnergy' : 'energy',
-      spec,
-      (x) => {
-        const factor = ENERGY_UNITS[x.unit.toLowerCase()];
-        return factor ? round(x.current * factor, 4) : undefined;
-      },
-    );
+    this.measure(a, 'energy', spec, kwh);
     const reader = this.readers.find((r) => r.key === key);
     if (reader) {
       reader.meter = true;
@@ -1044,7 +1146,8 @@ class NodeMapper {
             this.coverState(a);
           } else if (this.kind === 'door') {
             this.doorState(a);
-          } else if (a.type === ATTR.OPEN_CLOSE) {
+          } else if (a.type === ATTR.OPEN_CLOSE && this.kind !== 'valve' && this.kind !== 'lock') {
+            // (On a valve or a lock, OPEN_CLOSE is not a contact: left out.)
             // A contact: on (1) is open (Home Assistant's binary sensor).
             this.add(`a${a.id}`, this.nameOf('opening', a), binarySensor(C.OPENING_SENSOR), {
               attr: a.id,
@@ -1090,7 +1193,8 @@ class NodeMapper {
           this.valvePosition(a);
           break;
         case ATTR.TARGET_TEMPERATURE:
-          this.setpoint(a, { water: false });
+          // The setpoint of a warm water circuit is hot water: capped like it.
+          this.setpoint(a, { water: this.node.profile === P.WARM_WATER_CIRCUIT });
           break;
         case ATTR.WARM_WATER_TARGET_TEMPERATURE:
           this.setpoint(a, { water: true });

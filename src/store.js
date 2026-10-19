@@ -4,14 +4,18 @@
 //     only a salted scrypt fingerprint (enough to recognize them, costly to
 //     guess from), the reason, the number of refusals and when to try again
 //     (spaced retries, never a loop);
-//   - the end of a 429 pause (bounded when read back).
+//   - the end of a 429 pause (bounded when read back);
+//   - the state of each energy index guard (src/guard.js): its reference and
+//     the value held, validated and bounded when read back (only our own
+//     feature ids, 1000 at most), so that a restart never forgets a jump the
+//     user has not accepted.
 // /data is the only writable place of the container.
 // -----------------------------------------------------------------------------
 
 import { randomBytes, scryptSync } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { TIMINGS } from './constants.js';
+import { INDEX_STATES_MAX, TIMINGS } from './constants.js';
 
 const SCRYPT = { N: 16384, r: 8, p: 1 };
 
@@ -24,6 +28,36 @@ export function fingerprint(salt, host, username, password) {
 
 const HEX = (n) => new RegExp(`^[0-9a-f]{${n}}$`);
 
+const point = (p) =>
+  p && Number.isFinite(p.value) && p.value > 0 && Number.isFinite(p.at)
+    ? { value: p.value, at: p.at }
+    : null;
+
+const heldOf = (h) =>
+  h &&
+  (h.direction === 'up' || h.direction === 'down') &&
+  [h.from, h.to, h.threshold, h.at].every(Number.isFinite)
+    ? { direction: h.direction, from: h.from, to: h.to, threshold: h.threshold, at: h.at }
+    : null;
+
+/** The index states of the file: bounded, validated, only our own feature ids. */
+function indexesOf(raw) {
+  const indexes = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return indexes;
+  }
+  for (const [id, state] of Object.entries(raw).slice(0, INDEX_STATES_MAX)) {
+    if (typeof id !== 'string' || id.length > 255 || !/^ext:[^:]+:homee:/.test(id)) {
+      continue;
+    }
+    const last = point(state?.last);
+    if (last) {
+      indexes[id] = { last, held: heldOf(state?.held) };
+    }
+  }
+  return indexes;
+}
+
 export class StateStore {
   /**
    * @param {{ dir?: string|null, now?: () => number, logger?: object }} options
@@ -33,7 +67,8 @@ export class StateStore {
     this.dir = dir;
     this.now = now;
     this.logger = logger;
-    this.data = { salt: undefined, refused: undefined, pausedUntil: 0 };
+    /** indexes: feature external id -> { last, held } of its IndexGuard (src/guard.js) */
+    this.data = { salt: undefined, refused: undefined, pausedUntil: 0, indexes: {} };
     this.cache = new Map();
     this.load();
     if (!this.data.salt) {
@@ -68,6 +103,7 @@ export class StateStore {
       if (Number.isFinite(until) && until > 0) {
         this.data.pausedUntil = Math.min(until, this.now() + TIMINGS.rateLimitMax);
       }
+      this.data.indexes = indexesOf(json?.indexes);
     } catch {
       // No file yet, or unreadable: start empty.
     }
@@ -120,6 +156,48 @@ export class StateStore {
   clearRefusal() {
     if (this.data.refused) {
       this.data.refused = undefined;
+      this.save();
+    }
+  }
+
+  /**
+   * A gesture of the user (configuration saved): one try now. The same
+   * credentials keep their count of refusals (the next one waits longer);
+   * other credentials have no refusal to clear.
+   */
+  allowTry(creds) {
+    const refused = this.refusalOf(creds);
+    if (refused && refused.retryAt > this.now()) {
+      refused.retryAt = this.now();
+      this.save();
+    }
+  }
+
+  /** The state kept for an energy index (src/guard.js), or undefined. */
+  indexState(featureId) {
+    return Object.hasOwn(this.data.indexes, featureId) ? this.data.indexes[featureId] : undefined;
+  }
+
+  setIndexState(featureId, state) {
+    if (
+      !Object.hasOwn(this.data.indexes, featureId) &&
+      Object.keys(this.data.indexes).length >= INDEX_STATES_MAX
+    ) {
+      return;
+    }
+    this.data.indexes[featureId] = { last: point(state?.last), held: heldOf(state?.held) };
+    this.save();
+  }
+
+  dropIndexStates(prefix) {
+    let changed = false;
+    for (const id of Object.keys(this.data.indexes)) {
+      if (id === prefix || id.startsWith(`${prefix}:`)) {
+        delete this.data.indexes[id];
+        changed = true;
+      }
+    }
+    if (changed) {
       this.save();
     }
   }

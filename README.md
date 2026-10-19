@@ -21,7 +21,8 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (HomeeApp) ⇄ src/homee.js �
                                    ├─ src/mapping.js    one node -> features, readers, writers (pure)
                                    ├─ src/devices.js    nodes -> Gladys devices + routing tables (pure)
                                    ├─ src/publisher.js  states within 300/min, sensor throttling
-                                   └─ src/store.js      /data/state.json: refused credentials, 429 pause
+                                   ├─ src/guard.js      IndexGuard: the energy indexes Gladys bills (pure)
+                                   └─ src/store.js      /data/state.json: refused credentials, 429 pause, index guards
 ```
 
 - **Signing in**: the user name and the SHA-512 of the password in HTTP Basic,
@@ -38,11 +39,16 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (HomeeApp) ⇄ src/homee.js �
   5 minutes.
 - **Commands**: `PUT:nodes/<node>/attributes/<attribute>?target_value=<v>`. One
   at a time per node, sent within 3.5 s of their arrival or refused. The
-  sensitive ones (plugs, heating, locks, doors and gates, valves, sirens, the
-  homee mode) are buttons or a list, never switches, each behind an option
-  off by default, decided on the attribute read just before
-  (`GET:nodes/…/attributes/…`), the option checked again just before
-  sending, the echo of the box awaited.
+  sensitive ones (plugs and every device that is not a light nor a plain wall
+  relay, heating, locks, doors and gates, valves, sirens, the homee mode) are
+  buttons or a list, never switches, each behind an option off by default,
+  decided on the attribute read just before (`GET:nodes/…/attributes/…`),
+  the option checked again just before sending, the echo of the box awaited
+  once the queue is released. Protective commands (lock, close the valve,
+  stop, turn off, stop the siren) are never refused for the state.
+- **Energy**: each index goes through an `IndexGuard` (never 0, drops and
+  jumps held, shown on the badge, taken only by the "Accept the held index"
+  action), its state in `/data`.
 - **Failures**: credentials refused → stopped, persisted in `/data`, tried
   again after 1 h doubling to 24 h; 429 → pause of every path, persisted;
   unreachable → status message and `unreachable` badges, spaced retries.
@@ -60,6 +66,9 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (HomeeApp) ⇄ src/homee.js �
   meaning of their values.
 - [LM1LC3N7/gladys-hubitat](https://github.com/LM1LC3N7/gladys-hubitat), a bridge
   of the same author: the app structure, the state publisher, the test helpers.
+- [LM1LC3N7/gladys-p1-monitor](https://github.com/LM1LC3N7/gladys-p1-monitor), of
+  the same author: the `IndexGuard` of the energy indexes (`src/guard.js`, taken
+  as is, the maximum power a parameter) and its tests.
 
 No JavaScript homee client is maintained on npm; the only runtime dependency
 is the Gladys SDK (the WebSocket is the one built into Node.js).

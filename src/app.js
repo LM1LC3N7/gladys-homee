@@ -13,24 +13,40 @@
 // the test button or a new configuration. A 429 pauses every path,
 // persisted in /data.
 //
-// Commands: one at a time per node, sent within 3.5 s of their arrival or
-// refused. The sensitive ones (plugs, heating, locks, doors and gates,
-// valves, sirens, the homee mode) only when their option is on, decided on
-// the attribute read just before, the option checked again just before the
-// request, then the echo of the box awaited ("sent, without confirmation"
-// when it does not come). Locks, doors and valves are then guarded until they
-// report the state asked for.
+// Commands: one at a time per node while they are decided and sent (the
+// queue is released as soon as the PUT left), sent within 3.5 s of their
+// arrival or refused. The sensitive ones (plugs, heating, locks, doors and
+// gates, valves, sirens, the homee mode) only when their option is on,
+// decided on the attribute read just before, the option checked again just
+// before the request, then the echo of the box awaited ("sent, without
+// confirmation" when it does not come). The protective ones (lock, close the
+// valve, stop, turn off, stop the siren) are never refused for the state.
+// Nothing blocks a device after a command: the state asked for is awaited,
+// and a "state not confirmed" badge shows when it does not come.
+//
+// Energy indexes go through an IndexGuard each (src/guard.js): a drop or a
+// jump is held, shown on the badge and in the log, kept in /data, and taken
+// only by the "Accept the held index" action.
 // -----------------------------------------------------------------------------
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
 import { OPTION_OF_KIND, normalizeConfig } from './config.js';
-import { HOMEE, NODE_STATE, TIMINGS, WARNING } from './constants.js';
+import { HOMEE, INDEX_MAX_KW, LIMITS, NODE_STATE, TIMINGS, WARNING } from './constants.js';
 import { buildModel, emptyModel } from './devices.js';
+import { IndexGuard } from './guard.js';
 import { HomeeError, requestToken } from './homee.js';
 import { LiveError, openSocket } from './live.js';
 import { T, word } from './i18n.js';
 import { usable } from './mapping.js';
-import { attributeOf, mergeNode, nodeOf, nodesOf, settingsOf, withAttribute } from './nodes.js';
+import {
+  attributeOf,
+  mergeNode,
+  nodeOf,
+  nodesOf,
+  settingsOf,
+  withAttribute,
+  withDirection,
+} from './nodes.js';
 import { StatePublisher } from './publisher.js';
 import { StateStore } from './store.js';
 
@@ -52,6 +68,24 @@ const OFF_REFUSAL = {
   siren: 'sirenOff',
   alarm: 'alarmOff',
 };
+
+/** The index Gladys already holds for a feature of a created device, when it says so. */
+function lastValueOf(devices, featureId) {
+  for (const device of devices ?? []) {
+    const feature = (device?.features ?? []).find((f) => f.external_id === featureId);
+    if (feature) {
+      const value = Number(feature.last_value);
+      const at = Date.parse(feature.last_value_changed ?? '');
+      return feature.last_value !== null &&
+        feature.last_value !== undefined &&
+        Number.isFinite(value) &&
+        Number.isFinite(at)
+        ? { value, at }
+        : undefined;
+    }
+  }
+  return undefined;
+}
 
 export class HomeeApp {
   constructor({
@@ -97,22 +131,30 @@ export class HomeeApp {
     this.resyncTimer = undefined;
     this.modelTimer = undefined;
     this.readBackTimers = new Set();
-    /** the pending GET:all: { resolve, reject, timer, since } */
+    /** the pending GET:all, shared by whoever asks meanwhile: { promise, resolve, reject, timer, since } */
     this.allWaiter = undefined;
-    /** "<node>:<attribute>" -> Set of callbacks (attribute) => consumed? */
+    /** "<node>:<attribute>" -> Set of callbacks (attribute | undefined) */
     this.waiters = new Map();
+    /** "<node>:<attribute>" -> until when its fresh reads are not trusted (a late answer) */
+    this.quarantine = new Map();
     /** node id -> the tail of its command chain */
     this.chains = new Map();
-    /** node id -> { attr, done, moving, start, sawMoving, until, timer, impulse } */
-    this.guards = new Map();
-    this.unconfirmed = new Set();
+    /** node id -> { attr, done, timer }: the state a command asked for, awaited */
+    this.pending = new Map();
+    /** node id -> the attribute whose state was not confirmed (badge) */
+    this.unconfirmed = new Map();
+    /** impulse feature id -> when it was last sent (debounce) */
+    this.impulses = new Map();
+    /** "<node>:<attribute>" -> the direction (reverse_control_ui) first seen */
+    this.directions = new Map();
+    /** index feature id -> IndexGuard; and the last state saved of each */
+    this.indexGuards = new Map();
+    this.savedIndexes = new Map();
     /** feature id -> last value read, sent when the user creates the device */
     this.lastValues = new Map();
     this.created = new Set();
     /** device id -> last badge published (JSON) */
     this.transports = new Map();
-    /** meter feature id -> { value, at, low?, jump?, jumpAt? } (energy index rules) */
-    this.meters = new Map();
     this.lastStatus = undefined;
     this.publishedDevices = undefined;
     this.warned = new Set();
@@ -147,10 +189,10 @@ export class HomeeApp {
     this.running = true;
     this.publisher.start();
     const refusal = this.store.refusalOf(this.config);
-    if (refusal) {
+    if (refusal && refusal.retryAt > this.now()) {
       // Refused before (maybe before a restart): tried again only when due.
       this.blocked = refusal;
-      const wait = Math.max(0, refusal.retryAt - this.now());
+      const wait = refusal.retryAt - this.now();
       await this.setStatus(false, T.refused(wait));
       this.schedule(generation, wait, () => this.open(generation));
       return;
@@ -169,7 +211,8 @@ export class HomeeApp {
   /**
    * Gladys (re)connected: the same configuration keeps everything (token,
    * socket, 429 pause, refused credentials) and publishes again what Gladys
-   * keeps in memory only (status, Discovery, badges); another one starts again.
+   * keeps in memory only (status, Discovery, badges), the box online or not;
+   * another configuration starts again.
    */
   async resume(raw = {}) {
     if (!this.running || !sameConfig(normalizeConfig(raw), this.config)) {
@@ -181,8 +224,8 @@ export class HomeeApp {
     this.lastStatus = undefined;
     this.publishedDevices = undefined;
     this.transports.clear();
+    await this.rebuild({ force: true });
     if (this.online) {
-      await this.rebuild();
       await this.connectedStatus();
     } else if (this.blocked) {
       await this.setStatus(false, T.refused(Math.max(0, this.blocked.retryAt - this.now())));
@@ -192,10 +235,17 @@ export class HomeeApp {
     await this.publishAllTransports();
   }
 
-  /** The configuration was saved by the user: one try at once, even after a refusal. */
+  /**
+   * The configuration was saved by the user: one try at once, even after a
+   * refusal, which keeps its count (the next refusal waits longer). It never
+   * accepts a held energy index.
+   */
   async configUpdated(raw = {}) {
     this.logger.info('Configuration updated: reconnecting to the homee');
-    this.store.clearRefusal();
+    const next = normalizeConfig(raw);
+    if (!next.error) {
+      this.store.allowTry(next);
+    }
     await this.start(raw);
   }
 
@@ -205,10 +255,10 @@ export class HomeeApp {
     for (const timer of [this.timer, this.resyncTimer, this.modelTimer, ...this.readBackTimers]) {
       this.timers.clearTimeout(timer);
     }
-    for (const guard of this.guards.values()) {
-      this.timers.clearTimeout(guard.timer);
+    for (const pending of this.pending.values()) {
+      this.timers.clearTimeout(pending.timer);
     }
-    this.guards.clear();
+    this.pending.clear();
     this.readBackTimers.clear();
     this.timer = undefined;
     this.resyncTimer = undefined;
@@ -334,29 +384,36 @@ export class HomeeApp {
     }
   }
 
-  /** Asks the whole box (GET:all); resolves when it came. */
+  /**
+   * Asks the whole box (GET:all); resolves when it came. A GET:all already
+   * pending is shared (a Scan during the resync waits for the same answer).
+   */
   readAll(generation) {
-    return new Promise((resolve, reject) => {
-      const session = this.session;
-      if (!session) {
-        reject(new LiveError('closed', 'no websocket'));
-        return;
-      }
-      this.rejectAll();
-      const waiter = { resolve, reject, since: this.seq, generation };
-      waiter.timer = this.timers.setTimeout(() => {
-        if (this.allWaiter === waiter) {
-          this.allWaiter = undefined;
-          reject(new LiveError('timeout', 'no answer of the box within 30 s'));
-        }
-      }, TIMINGS.allTimeout);
-      this.allWaiter = waiter;
-      if (!session.send('GET:all')) {
-        this.allWaiter = undefined;
-        this.timers.clearTimeout(waiter.timer);
-        reject(new LiveError('closed', 'the websocket is closed'));
-      }
+    if (this.allWaiter && this.allWaiter.session === this.session) {
+      return this.allWaiter.promise;
+    }
+    const session = this.session;
+    if (!session) {
+      return Promise.reject(new LiveError('closed', 'no websocket'));
+    }
+    const waiter = { since: this.seq, generation, session };
+    waiter.promise = new Promise((resolve, reject) => {
+      waiter.resolve = resolve;
+      waiter.reject = reject;
     });
+    waiter.timer = this.timers.setTimeout(() => {
+      if (this.allWaiter === waiter) {
+        this.allWaiter = undefined;
+        waiter.reject(new LiveError('timeout', 'no answer of the box within 30 s'));
+      }
+    }, TIMINGS.allTimeout);
+    this.allWaiter = waiter;
+    if (!session.send('GET:all')) {
+      this.allWaiter = undefined;
+      this.timers.clearTimeout(waiter.timer);
+      waiter.reject(new LiveError('closed', 'the websocket is closed'));
+    }
+    return waiter.promise;
   }
 
   rejectAll() {
@@ -364,7 +421,7 @@ export class HomeeApp {
     if (waiter) {
       this.allWaiter = undefined;
       this.timers.clearTimeout(waiter.timer);
-      waiter.reject(new LiveError('closed', 'superseded'));
+      waiter.reject(new LiveError('closed', 'the websocket is closed'));
     }
   }
 
@@ -392,7 +449,7 @@ export class HomeeApp {
     session?.close();
     this.rejectAll();
     for (const set of this.waiters.values()) {
-      for (const fn of set) {
+      for (const fn of [...set]) {
         fn(undefined);
       }
     }
@@ -439,8 +496,9 @@ export class HomeeApp {
       this.token &&
       this.now() - this.token.at > TIMINGS.tokenFresh
     ) {
-      // The socket refused a token that is not new: one new token at the next
-      // try (a new token refused too only waits for the growing delay).
+      // The box answers but refused the websocket with a token that is not
+      // new: one new token at the next try (a new token refused too only
+      // waits for the growing delay). A network failure keeps the token.
       this.token = undefined;
     }
     this.failures += 1;
@@ -476,7 +534,7 @@ export class HomeeApp {
         break;
       case 'nodes':
         if (Array.isArray(body)) {
-          for (const raw of body) {
+          for (const raw of body.slice(0, LIMITS.nodes)) {
             this.onNode(generation, raw);
           }
         }
@@ -519,7 +577,7 @@ export class HomeeApp {
         'Another homee answers at this address: its nodes replace the previous ones',
       );
       this.nodes = new Map();
-      this.meters.clear();
+      this.directions.clear();
     }
     this.box = settings;
     const since = waiter?.since ?? this.seq;
@@ -554,12 +612,17 @@ export class HomeeApp {
       return;
     }
     if (!node.attributes.has(attribute.id)) {
+      if (node.attributes.size >= LIMITS.attributesPerNode) {
+        return;
+      }
       this.scheduleModel(generation);
     }
-    this.nodes.set(node.id, withAttribute(node, attribute));
-    this.applyAttribute(node.id, attribute);
-    this.checkGuard(node.id, attribute);
-    this.notify(node.id, attribute);
+    const updated = withAttribute(node, attribute);
+    this.nodes.set(node.id, updated);
+    const known = updated.attributes.get(attribute.id);
+    this.applyAttribute(node.id, known);
+    this.checkPending(node.id, known);
+    this.notify(node.id, known);
   }
 
   onNode(generation, raw) {
@@ -576,7 +639,7 @@ export class HomeeApp {
     }
     this.applyNode(node);
     for (const attribute of node.attributes.values()) {
-      this.checkGuard(node.id, attribute);
+      this.checkPending(node.id, attribute);
       this.notify(node.id, attribute);
     }
   }
@@ -659,7 +722,11 @@ export class HomeeApp {
 
   /** One attribute: its value to the features that read it. */
   applyAttribute(nodeId, attribute) {
-    for (const reader of this.model.readers.get(`${nodeId}:${attribute.id}`) ?? []) {
+    const key = `${nodeId}:${attribute.id}`;
+    if (attribute.reversed !== undefined && !this.directions.has(key)) {
+      this.directions.set(key, attribute.reversed);
+    }
+    for (const reader of this.model.readers.get(key) ?? []) {
       let value;
       try {
         value = reader.read(attribute);
@@ -667,56 +734,88 @@ export class HomeeApp {
         this.warnOnce(`read:${reader.featureId}`, `${reader.featureId}: ${err.message}`);
         continue;
       }
-      if (value && (!reader.meter || this.meterOk(reader.featureId, value.state))) {
+      if (!value) {
+        continue;
+      }
+      if (reader.meter) {
+        this.indexValue(nodeId, reader.featureId, value.state);
+      } else {
         this.record(reader.featureId, value);
       }
     }
   }
 
+  // --- Energy indexes ----------------------------------------------------------------
+
+  /** The guard of an index feature: the value Gladys holds, and the state kept in /data. */
+  indexGuard(featureId) {
+    let guard = this.indexGuards.get(featureId);
+    if (!guard) {
+      guard = new IndexGuard(
+        lastValueOf(this.gladys.devices, featureId),
+        this.store.indexState(featureId),
+        this.now(),
+        INDEX_MAX_KW,
+      );
+      this.indexGuards.set(featureId, guard);
+    }
+    return guard;
+  }
+
   /**
-   * Energy index rules (the core counts every rise): a lower reading, 0
-   * included, is held, and taken only when a later reading is strictly above
-   * the low value held (the meter was reset and counts again). A jump higher
-   * than a plausible consumption is held too, and taken only when a later
-   * reading goes on from it plausibly: repeating it is not enough.
+   * A reading of an energy index. Only for a device created in Gladys (the
+   * reference is what Gladys holds). Taken by the guard: published. Held:
+   * the last accepted value is sent again (no delta for the core), the hold
+   * logged and shown on the badge.
    */
-  meterOk(featureId, state) {
-    const now = this.now();
-    const last = this.meters.get(featureId);
-    if (!last) {
-      this.meters.set(featureId, { value: state, at: now });
-      return true;
+  indexValue(nodeId, featureId, state) {
+    if (!this.created.has(featureId)) {
+      return;
     }
-    // At most 25 kW since the last reading, plus 1 kWh of rounding.
-    const plausible = (at) => 1 + 25 * ((now - at) / 3_600_000);
-    if (state < last.value) {
-      if (last.low !== undefined && state > last.low) {
-        this.meters.set(featureId, { value: state, at: now });
-        return true;
+    const guard = this.indexGuard(featureId);
+    const wasHeld = Boolean(guard.held);
+    const ok = guard.accept(state, this.now());
+    this.saveIndex(featureId, guard);
+    if (ok) {
+      this.record(featureId, { state });
+    } else {
+      const held = guard.held;
+      if (held) {
+        this.warnOnce(
+          `held:${featureId}:${held.direction}:${held.from}:${held.threshold}`,
+          `${featureId}: energy index ${held.direction === 'down' ? 'drop' : 'jump'} held back (${held.from} -> ${held.to} kWh): the "Accept the held index" action takes it`,
+        );
       }
-      last.low = state;
-      this.warnOnce(`drop:${featureId}`, `${featureId}: energy index went down, held`);
-      return false;
+      if (guard.last) {
+        this.record(featureId, { state: guard.last.value });
+      }
     }
-    last.low = undefined;
-    if (state - last.value > plausible(last.at)) {
-      if (
-        last.jump !== undefined &&
-        state > last.jump &&
-        state - last.jump <= plausible(last.jumpAt)
-      ) {
-        this.meters.set(featureId, { value: state, at: now });
-        return true;
-      }
-      if (last.jump === undefined || state !== last.jump) {
-        last.jump = state;
-        last.jumpAt = now;
-      }
-      this.warnOnce(`jump:${featureId}`, `${featureId}: energy index jumped, held`);
-      return false;
+    if (wasHeld !== Boolean(guard.held)) {
+      this.publishTransportOf(nodeId);
     }
-    this.meters.set(featureId, { value: state, at: now });
-    return true;
+  }
+
+  /** Keeps a guard in /data when its reference or its value held changed. */
+  saveIndex(featureId, guard) {
+    const state = guard.state();
+    const key = JSON.stringify([
+      state.last,
+      state.held && {
+        direction: state.held.direction,
+        from: state.held.from,
+        threshold: state.held.threshold,
+      },
+    ]);
+    if (this.savedIndexes.get(featureId) === key) {
+      return;
+    }
+    this.savedIndexes.set(featureId, key);
+    this.store.setIndexState(featureId, state);
+  }
+
+  /** The guards of a device's indexes. */
+  guardsOf(deviceId) {
+    return [...this.indexGuards.entries()].filter(([id]) => id.startsWith(`${deviceId}:`));
   }
 
   /** Keeps the value, and sends it when the device exists in Gladys. */
@@ -753,6 +852,14 @@ export class HomeeApp {
     const node = this.nodes.get(nodeId);
     if (node && node.id !== -1 && node.state !== NODE_STATE.AVAILABLE) {
       return { transport: DEVICE_TRANSPORTS.UNREACHABLE, degraded: true, message: T.badge.offline };
+    }
+    const held = this.guardsOf(deviceId).find(([, guard]) => guard.held);
+    if (held) {
+      return {
+        transport: DEVICE_TRANSPORTS.LOCAL,
+        degraded: true,
+        message: T.badge.held(held[1].held),
+      };
     }
     if (this.unconfirmed.has(nodeId)) {
       return { transport: DEVICE_TRANSPORTS.LOCAL, degraded: true, message: T.badge.unconfirmed };
@@ -809,18 +916,39 @@ export class HomeeApp {
     );
   }
 
-  async deviceCreated(device) {
+  /** A device created (or updated) by the user: its values, its badge. */
+  async deviceCreated(device, { fresh = true } = {}) {
     this.refreshCreated();
-    this.transports.delete(device?.external_id);
+    const deviceId = device?.external_id;
+    this.transports.delete(deviceId);
+    if (deviceId && fresh) {
+      // A new device: no index reference yet (nor a value held in /data for a
+      // deleted device of the same id); its indexes start again from the box.
+      for (const [id] of this.guardsOf(deviceId)) {
+        this.indexGuards.delete(id);
+        this.savedIndexes.delete(id);
+      }
+      this.store.dropIndexStates(deviceId);
+    }
     for (const f of device?.features ?? []) {
       const value = this.lastValues.get(f.external_id);
       if (value) {
         this.publisher.push(f.external_id, value);
       }
     }
-    if (device?.external_id) {
-      await this.publishTransport(device.external_id).catch(() => {});
+    const nodeId = this.model.deviceIds.get(deviceId);
+    const node = this.nodes.get(nodeId);
+    if (node) {
+      // The indexes are read now, through their new guard.
+      this.applyNode(node);
     }
+    if (deviceId) {
+      await this.publishTransport(deviceId).catch(() => {});
+    }
+  }
+
+  async deviceUpdated(device) {
+    await this.deviceCreated(device, { fresh: false });
   }
 
   async deviceDeleted(device) {
@@ -861,16 +989,16 @@ export class HomeeApp {
     }
   }
 
-  /** Refuses a guarded command while the previous one is not confirmed. */
-  checkNotGuarded(nodeId) {
-    const guard = this.guards.get(nodeId);
-    if (guard && this.now() < guard.until) {
-      throw this.denied('busy');
-    }
-  }
-
-  /** Reads one attribute just now (GET), or refuses: never the value in memory. */
+  /**
+   * Reads one attribute just now (GET), or refuses: never the value in
+   * memory. A read that timed out puts the attribute in quarantine: its late
+   * answer could be taken for the fresh read of the next command.
+   */
   readFresh(nodeId, attrId, deadline) {
+    const key = `${nodeId}:${attrId}`;
+    if ((this.quarantine.get(key) ?? 0) > this.now()) {
+      return Promise.reject(this.denied('unknownState'));
+    }
     return new Promise((resolve, reject) => {
       const session = this.session;
       if (!session) {
@@ -881,6 +1009,7 @@ export class HomeeApp {
       const timer = this.timers.setTimeout(
         () => {
           release();
+          this.quarantine.set(key, this.now() + TIMINGS.quarantine);
           reject(this.denied('unknownState'));
         },
         Math.max(0, deadline - this.now() - 300),
@@ -929,54 +1058,43 @@ export class HomeeApp {
     });
   }
 
-  /** After a lock, door or valve command: no other one until it reports the state asked for. */
-  setGuard(nodeId, writer, plan) {
-    const previous = this.guards.get(nodeId);
-    this.timers.clearTimeout(previous?.timer);
-    const span = plan.impulse ? TIMINGS.guard.impulse : TIMINGS.guard[writer.guard];
-    const guard = {
-      attr: writer.attr,
-      done: plan.done,
-      moving: plan.moving,
-      start: plan.start,
-      sawMoving: false,
-      impulse: plan.impulse === true,
-      until: this.now() + span,
-    };
-    guard.timer = this.timers.setTimeout(() => {
-      if (this.guards.get(nodeId) === guard) {
-        this.guards.delete(nodeId);
-        if (!guard.impulse) {
-          // Never confirmed in time: told on the badge until a read shows a state.
-          this.logger.warn(`Node ${nodeId}: the state asked for was not reported in time`);
-          this.unconfirmed.add(nodeId);
-          this.publishTransportOf(nodeId);
-        }
-      }
-    }, span);
-    this.guards.set(nodeId, guard);
-  }
-
   /**
-   * A new value of a guarded attribute: a move is noted; the guard is lifted
-   * only on the state asked for, and on the state it started from only after
-   * a move was seen (a late report never lifts it); never on an unknown value.
+   * After a lock, door or valve command, the state asked for is awaited (it
+   * blocks nothing): not reported in time, the badge says "state not
+   * confirmed" until the device reports a state.
    */
-  checkGuard(nodeId, attribute) {
-    const guard = this.guards.get(nodeId);
-    if (!guard || guard.impulse || attribute.id !== guard.attr || !usable(attribute)) {
+  expectState(nodeId, writer, plan) {
+    if (!plan.done || !TIMINGS.confirm[writer.confirm]) {
       return;
     }
-    if (guard.moving?.(attribute)) {
-      guard.sawMoving = true;
-      return;
-    }
-    if (guard.done(attribute) && (!near(attribute.current, guard.start) || guard.sawMoving)) {
-      this.timers.clearTimeout(guard.timer);
-      this.guards.delete(nodeId);
-      if (this.unconfirmed.delete(nodeId)) {
+    const previous = this.pending.get(nodeId);
+    this.timers.clearTimeout(previous?.timer);
+    const pending = { attr: writer.attr, done: plan.done };
+    pending.timer = this.timers.setTimeout(() => {
+      if (this.pending.get(nodeId) === pending) {
+        this.pending.delete(nodeId);
+        this.logger.warn(`Node ${nodeId}: the state asked for was not reported in time`);
+        this.unconfirmed.set(nodeId, pending.attr);
         this.publishTransportOf(nodeId);
       }
+    }, TIMINGS.confirm[writer.confirm]);
+    this.pending.set(nodeId, pending);
+  }
+
+  /** A new value: the state awaited came, or a state after an unconfirmed command. */
+  checkPending(nodeId, attribute) {
+    if (!usable(attribute)) {
+      return;
+    }
+    const pending = this.pending.get(nodeId);
+    if (pending && attribute.id === pending.attr && pending.done(attribute)) {
+      this.timers.clearTimeout(pending.timer);
+      this.pending.delete(nodeId);
+    }
+    if (!this.pending.has(nodeId) && this.unconfirmed.get(nodeId) === attribute.id) {
+      // The device reported its state: known again, the badge cleared.
+      this.unconfirmed.delete(nodeId);
+      this.publishTransportOf(nodeId);
     }
   }
 
@@ -1010,11 +1128,10 @@ export class HomeeApp {
       if (!this.session || !this.online) {
         throw this.denied('notConnected');
       }
-      if (writer.guard) {
-        this.checkNotGuarded(nodeId);
-      }
+      this.checkBounce(writer, featureId);
+      let echo;
       await this.serialized(nodeId, async () => {
-        // The option and the guard may have changed while the command waited.
+        // The option may have changed while the command waited.
         this.checkAllowed(writer.kind);
         if (!this.session || !this.online) {
           throw this.denied('notConnected');
@@ -1022,33 +1139,8 @@ export class HomeeApp {
         if (this.now() > deadline) {
           throw this.denied('tooLate');
         }
-        let plan;
-        try {
-          if (writer.kind) {
-            if (writer.guard) {
-              this.checkNotGuarded(nodeId);
-            }
-            const fresh = await this.readFresh(nodeId, writer.attr, deadline);
-            const node = this.nodes.get(nodeId);
-            if (!usable(fresh) || (nodeId !== -1 && node?.state !== NODE_STATE.AVAILABLE)) {
-              throw this.denied('unknownState');
-            }
-            plan = writer.plan(fresh, value, { waterHeaterMax: this.config.waterHeaterMax });
-            plan.start = fresh.current;
-          } else {
-            const attribute = this.nodes.get(nodeId)?.attributes.get(writer.attr);
-            if (!attribute) {
-              throw this.denied('unknownState');
-            }
-            plan = { target: writer.write(value, attribute) };
-          }
-        } catch (err) {
-          // A refusal of the mapping (src/mapping.js) gets its text in the user's language.
-          if (err?.refusal && !err.localized) {
-            throw this.denied(T.denied[err.refusal] ? err.refusal : 'badValue');
-          }
-          throw err;
-        }
+        this.checkBounce(writer, featureId);
+        const plan = await this.planOf(writer, value, deadline);
         if (plan.already) {
           return;
         }
@@ -1063,25 +1155,25 @@ export class HomeeApp {
           throw this.denied('notConnected');
         }
         sent = true;
-        if (writer.guard) {
-          this.setGuard(nodeId, writer, plan);
+        if (writer.impulse) {
+          this.impulses.set(featureId, this.now());
+        }
+        if (writer.confirm) {
+          this.expectState(nodeId, writer, plan);
         }
         if (writer.kind) {
           for (const delay of TIMINGS.readBacks) {
             this.readBack(nodeId, writer.attr, delay);
           }
-          const echoed = await this.waitEcho(
-            nodeId,
-            writer.attr,
-            plan.target,
-            deadline + TIMINGS.echoSlack,
-          );
-          if (!echoed) {
-            throw this.denied('sentUnconfirmed');
-          }
+          // Registered now, awaited after the queue is released: a stop or a
+          // protective command never waits behind this echo.
+          echo = this.waitEcho(nodeId, writer.attr, plan.target, deadline + TIMINGS.echoSlack);
         }
         this.logger.debug(`Command sent for ${featureId}`);
       });
+      if (echo && !(await echo)) {
+        throw this.denied('sentUnconfirmed');
+      }
     } catch (err) {
       if (!sent) {
         // Gladys shows the value asked for: send the known one again.
@@ -1095,9 +1187,86 @@ export class HomeeApp {
     }
   }
 
-  // --- Configuration screen button ---------------------------------------------------
+  /** Two presses of an impulse within the debounce are one: the second is refused. */
+  checkBounce(writer, featureId) {
+    const last = this.impulses.get(featureId);
+    if (writer.impulse && last !== undefined && this.now() - last < TIMINGS.impulseDebounce) {
+      throw this.denied('busy');
+    }
+  }
 
-  /** A token, the websocket, GET:all, with the saved configuration; then a count. */
+  /** The plan of a command: on the attribute read just now, or on the memory for the others. */
+  async planOf(writer, value, deadline) {
+    const { nodeId } = writer;
+    const known = this.nodes.get(nodeId)?.attributes.get(writer.attr);
+    try {
+      if (writer.kind && !writer.protective) {
+        const read = await this.readFresh(nodeId, writer.attr, deadline);
+        const fresh = withDirection(read, this.nodes.get(nodeId)?.attributes.get(writer.attr));
+        const node = this.nodes.get(nodeId);
+        if (!usable(fresh) || (nodeId !== -1 && node?.state !== NODE_STATE.AVAILABLE)) {
+          throw this.denied('unknownState');
+        }
+        if (writer.directional) {
+          const first = this.directions.get(`${nodeId}:${writer.attr}`);
+          if (first !== undefined && fresh.reversed !== undefined && first !== fresh.reversed) {
+            throw this.denied('directionChanged');
+          }
+        }
+        const plan = writer.plan(fresh, value, { waterHeaterMax: this.config.waterHeaterMax });
+        return { ...plan, start: fresh.current };
+      }
+      if (writer.kind) {
+        // Protective: never refused for the state, planned on what is known.
+        return writer.plan(known, value, { waterHeaterMax: this.config.waterHeaterMax });
+      }
+      if (!known) {
+        throw this.denied('unknownState');
+      }
+      return { target: writer.write(value, known) };
+    } catch (err) {
+      // A refusal of the mapping (src/mapping.js) gets its text in the user's language.
+      if (err?.refusal && !err.localized) {
+        throw this.denied(T.denied[err.refusal] ? err.refusal : 'badValue');
+      }
+      throw err;
+    }
+  }
+
+  // --- Configuration screen buttons ---------------------------------------------------
+
+  /**
+   * "Accept the held index": takes, for each index of the device chosen, the
+   * value held as shown now (plus what the device may draw until its next
+   * reading, src/guard.js), never anything else. Answers with the kWh counted.
+   */
+  async acceptHeldIndex(fields = {}) {
+    const deviceId = typeof fields?.device === 'string' ? fields.device : '';
+    if (!deviceId) {
+      return T.accept.noDevice;
+    }
+    const accepted = [];
+    for (const [id, guard] of this.guardsOf(deviceId)) {
+      const taken = guard.acceptHeld();
+      if (taken) {
+        accepted.push(taken);
+        this.logger.info(
+          `${id}: energy index ${taken.direction === 'down' ? 'drop' : 'jump'} accepted by the user`,
+        );
+      }
+    }
+    if (accepted.length === 0) {
+      return T.accept.nothing;
+    }
+    // The value held is the one in memory: taken now.
+    const node = this.nodes.get(this.model.deviceIds.get(deviceId));
+    if (node) {
+      this.applyNode(node);
+    }
+    return T.accept.done(accepted);
+  }
+
+  /** The test button: the connection in use when there is one, else a token, the socket, GET:all. */
   async testConnection() {
     const config = this.config;
     if (config.error) {
@@ -1106,6 +1275,20 @@ export class HomeeApp {
     if (this.paused()) {
       // A 429 pause covers the test too.
       return T.failure({ kind: 'rate' });
+    }
+    if (this.online && this.session) {
+      try {
+        await this.readAll(this.generation);
+        return T.test.ok({
+          host: config.host,
+          name: this.box?.name ?? 'homee',
+          nodes: this.nodes.size,
+          devices: this.model.devices.length,
+          empty: this.model.counts.empty,
+        });
+      } catch (err) {
+        return T.failure(err);
+      }
     }
     let session;
     try {
