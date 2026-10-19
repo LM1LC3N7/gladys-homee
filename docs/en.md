@@ -1,61 +1,102 @@
-# Demo Devices Template
+# homee
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+This integration connects your **homee** box (Z-Wave, Zigbee, EnOcean,
+depending on its cubes) to Gladys Assistant, locally: the devices paired with
+the box become Gladys devices, their states follow the box live and Gladys
+controls them through it.
 
-## What you get
+> Unofficial integration, not affiliated with homee GmbH. It has **never been
+> tested with a real homee**: it was written from the pyHomee library and the
+> homee integration of Home Assistant, and tested against a simulated box.
+> Your feedback is welcome.
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+## What is supported
+
+- **Lights**: on/off, brightness, colour temperature.
+- **Switches** (wall relays): on/off, dimmer.
+- **Plugs**: state, power, energy (cumulative index), and "Turn on" / "Turn
+  off" buttons behind an option (see below).
+- **Roller shutters**: open, close, stop, position.
+- **Thermostats and radiator heads**: temperature, setpoint, valve opening,
+  battery, heating mode (read).
+- **Hot water**: temperature, setpoint (capped).
+- **Sensors**: opening, window, motion, presence, leak and flood, smoke,
+  carbon monoxide, tamper, low battery, temperature, humidity, illuminance,
+  CO2, UV, wind, rain, current, voltage.
+- **Locks, garage doors, gates, window motors, impulse relays, water valves,
+  sirens, the homee mode**: read-only state, and buttons (or a list for the
+  mode) that work only when you allow them.
+- Remotes and wall buttons (presses), homeegrams and the INOVA alarm are not
+  handled yet.
 
 ## Configuration
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+1. In the homee app, preferably create a **user of its own** for Gladys.
+2. Note the **local IP address** of the box (Settings → homee, or your
+   router). Give it a fixed address.
+3. In Gladys, Integrations → homee: type the IP address, the user name and the
+   password, then **Test the connection**.
+4. In the **Discovery** tab, add the devices you want.
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+The password is a secret field: it is kept by Gladys in its database, never
+shown again, and sent only to your homee (as its SHA-512 fingerprint, like the
+homee apps do). The integration only uses the local connection of the box
+(port 7681), never my.hom.ee.
 
-## Actions
+## Safety: what stays read-only
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+A "turn everything off" (Google Home, Alexa, HomeKit, MCP, a scene) must never
+reach a valve, a lock, a siren, a heating or the unknown load of a plug. These
+devices therefore **never get a switch** in Gladys: their state is read-only
+and their commands are buttons, refused while the matching option is off (all
+are off by default):
 
-## Scenes
+| Option                        | What it allows                                                 |
+| ----------------------------- | -------------------------------------------------------------- |
+| Allow plug control            | Turn on / Turn off buttons of plugs                            |
+| Allow heating control         | Thermostat and hot water setpoints, on/off of electric heaters |
+| Allow lock control            | Lock, Unlock, Unlatch                                          |
+| Allow door and gate control   | Open, Close, Stop, impulses                                    |
+| Allow valve control           | Open / Close water valves                                      |
+| Allow siren control           | Sound / Stop the siren                                         |
+| Allow changing the homee mode | Home, Sleeping, Away, Vacation (a list)                        |
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+For each of these commands, the integration reads the state of the device just
+before, refuses when that state is unknown or moving, checks the option one
+last time just before sending, and waits for the box to confirm. Without a
+confirmation in time, Gladys shows "Command sent, without confirmation from
+the homee": check the device. A lock, a door or a valve is then guarded until
+it reports the state asked for (30 s, 90 s or 60 s at most). A command that
+cannot leave within 3.5 s is refused, never sent late.
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+The hot water setpoint is capped at **55 °C** by default (scalding risk),
+adjustable up to **60 °C** at most. The valves of radiator heads are never
+controlled directly: they follow their setpoint.
 
-## Dashboard
+## Connection and errors
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+- A token is asked from the box when connecting and kept in memory only; it is
+  renewed before its end, never in a loop.
+- A lost live connection is opened again after 5 s, then 10 s, 20 s… up to
+  5 minutes between two tries. The whole box is read again every 10 minutes;
+  without an answer within 30 s, the connection is opened again.
+- **Refused credentials**: the integration stops and notes it in `/data`
+  (without the user name or the password, only a salted fingerprint). Next
+  automatic try after 1 h, then 2 h, 4 h… up to 24 h; "Test the connection"
+  or saving the configuration tries at once.
+- If the box asks to slow down (HTTP 429), the integration pauses (1 minute to
+  6 hours), kept even across a restart.
 
-## Troubleshooting
+## Known limits
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+- Never tested with a real homee (see above): the profiles and the meaning of
+  some values come from pyHomee and Home Assistant.
+- Feature names are set when the device is added.
+- Remote presses, homeegrams, groups and the INOVA alarm are not handled yet.
+
+## Credits
+
+- [pyHomee](https://github.com/Taraman17/pyHomee) (MIT), the library of the
+  homee integration of Home Assistant, whose protocol is ported.
+- The homee integration of [Home Assistant](https://github.com/home-assistant/core)
+  (Apache-2.0), for the meaning of the profiles and values.

@@ -1,177 +1,225 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "homee",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Your homee box devices in Gladys: lights, plugs, shutters, sensors, thermostats. Unofficial.",
+    "fr": "Les appareils de votre box homee dans Gladys : lumières, prises, volets, capteurs. Non officiel."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-homee:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-homee/main/cover.png",
+  "categories": ["protocols", "lighting", "climate"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your homee devices in Gladys",
+        "fr": "Vos appareils homee dans Gladys"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "The devices paired with your homee box (Z-Wave, Zigbee, EnOcean) are offered in the Discovery tab: lights, switches, plugs, shutters, thermostats, contact, motion, leak, smoke sensors, temperature, humidity, consumption. The states follow the box live, through its local connection only. Plugs, heating, locks, doors and gates, valves, sirens and the homee mode stay read-only until you allow them below, and they are never switches. Never tested with a real box yet. Unofficial, not affiliated with homee.",
+        "fr": "Les appareils appairés à votre box homee (Z-Wave, Zigbee, EnOcean) sont proposés dans l'onglet Découverte : lumières, interrupteurs, prises, volets, thermostats, capteurs d'ouverture, de mouvement, de fuite, de fumée, température, humidité, consommation. Les états suivent la box en direct, uniquement par sa connexion locale. Prises, chauffage, serrures, portes et portails, vannes, sirènes et mode du homee restent en lecture seule tant que vous ne les autorisez pas ci-dessous, et ne sont jamais des interrupteurs. Jamais testée avec une vraie box pour l'instant. Non officiel, sans lien avec homee."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-homee/blob/main/docs/fr.md",
+          "label": { "en": "Guide (French)", "fr": "Guide (français)" }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-homee/blob/main/docs/en.md",
+          "label": { "en": "Guide (English)", "fr": "Guide (anglais)" }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
+      "key": "host",
+      "type": "string",
+      "label": { "en": "Address of the homee", "fr": "Adresse du homee" },
       "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+        "en": "The local IP address of your homee box, like 192.168.1.60 (shown in the homee app, Settings → homee). Local only: not my.hom.ee.",
+        "fr": "L'adresse IP locale de votre box homee, par exemple 192.168.1.60 (affichée dans l'app homee, Réglages → homee). Local uniquement : pas my.hom.ee."
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "placeholder": { "en": "192.168.1.60", "fr": "192.168.1.60" },
+      "required": true
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
+      "key": "username",
+      "type": "string",
+      "label": { "en": "homee user name", "fr": "Nom d'utilisateur homee" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "A user of the homee box, the one you log in with in the homee app. A user of its own for Gladys is best.",
+        "fr": "Un utilisateur de la box homee, celui avec lequel vous vous connectez dans l'app homee. Un utilisateur dédié à Gladys est préférable."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "required": true
     },
     {
-      "key": "unit",
+      "key": "password",
+      "type": "secret",
+      "label": { "en": "Password", "fr": "Mot de passe" },
+      "description": {
+        "en": "The password of this homee user. Kept by Gladys in its database, never shown again, and sent only to your homee.",
+        "fr": "Le mot de passe de cet utilisateur homee. Gardé par Gladys dans sa base, jamais réaffiché, et envoyé seulement à votre homee."
+      },
+      "required": true
+    },
+    {
+      "key": "language",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
+      "description": {
+        "en": "Used for the names of the features of the devices added from now on.",
+        "fr": "Sert aux noms des fonctionnalités des appareils ajoutés désormais."
+      },
       "required": false,
-      "default": "celsius",
+      "default": "fr",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
+        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
       ]
     },
     {
-      "key": "poll_frequency",
+      "key": "sensor_interval",
       "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "label": {
+        "en": "Minimum interval between two readings of a sensor (s)",
+        "fr": "Intervalle minimum entre deux mesures d'un capteur (s)"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Some devices report every second (power meters): Gladys keeps the last reading at this pace. Switches, lights, contact and motion sensors are never delayed.",
+        "fr": "Certains appareils remontent chaque seconde (mesures de puissance) : Gladys garde la dernière mesure à ce rythme. Interrupteurs, lumières, capteurs d'ouverture et de mouvement ne sont jamais retardés."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": 10,
+      "min": 0,
+      "max": 300
+    },
+    {
+      "key": "allow_plug_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow plug control from Gladys",
+        "fr": "Autoriser le pilotage des prises depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: the load behind a plug is unknown (a heater, a freezer…), so a plug is never a switch: its state is read-only and it has \"Turn on\" and \"Turn off\" buttons, which work only when this option is on.",
+        "fr": "Désactivé par défaut : la charge derrière une prise est inconnue (un radiateur, un congélateur…), donc une prise n'est jamais un interrupteur : son état est en lecture seule et elle a des boutons « Allumer » et « Éteindre », qui ne fonctionnent que si cette option est activée."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_heating_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow heating control from Gladys",
+        "fr": "Autoriser le pilotage du chauffage depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: setpoints of thermostats and hot water, and the on/off buttons of electric heaters, are read-only. On, Gladys can change them, from the dashboard and scenes.",
+        "fr": "Désactivé par défaut : les consignes des thermostats et de l'eau chaude, et les boutons marche/arrêt des radiateurs électriques, sont en lecture seule. Activé, Gladys peut les changer, depuis le tableau de bord et les scènes."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "water_heater_max",
+      "type": "number",
+      "label": {
+        "en": "Highest hot water setpoint (°C)",
+        "fr": "Consigne d'eau chaude la plus haute (°C)"
+      },
+      "description": {
+        "en": "A hot water setpoint above it is refused (scalding risk): 55 °C by default, 60 °C at most.",
+        "fr": "Une consigne d'eau chaude au-dessus est refusée (risque de brûlure) : 55 °C par défaut, 60 °C au plus."
+      },
+      "required": false,
+      "default": 55,
+      "min": 40,
+      "max": 60
+    },
+    {
+      "key": "allow_lock_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow lock control from Gladys",
+        "fr": "Autoriser le pilotage des serrures depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: locks are read-only. On, their \"Lock\", \"Unlock\" and \"Unlatch\" buttons work, from the dashboard and scenes.",
+        "fr": "Désactivé par défaut : les serrures sont en lecture seule. Activé, leurs boutons « Verrouiller », « Déverrouiller » et « Ouvrir » fonctionnent, depuis le tableau de bord et les scènes."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_door_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow door and gate control from Gladys",
+        "fr": "Autoriser le pilotage des portes et portails depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: garage doors, gates, doors, window motors and impulse relays are read-only. On, their \"Open\", \"Close\", \"Stop\" and impulse buttons work.",
+        "fr": "Désactivé par défaut : portes de garage, portails, portes, moteurs de fenêtre et relais à impulsion sont en lecture seule. Activé, leurs boutons « Ouvrir », « Fermer », « Arrêter » et d'impulsion fonctionnent."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_valve_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow valve control from Gladys",
+        "fr": "Autoriser le pilotage des vannes depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: water valves are read-only. On, their open and close buttons work. Radiator valves always follow their thermostat.",
+        "fr": "Désactivé par défaut : les vannes d'eau sont en lecture seule. Activé, leurs boutons d'ouverture et de fermeture fonctionnent. Les vannes de radiateur suivent toujours leur thermostat."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_siren_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow siren control from Gladys",
+        "fr": "Autoriser le pilotage des sirènes depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: sirens are read-only. On, their \"Sound the siren\" and \"Stop the siren\" buttons work.",
+        "fr": "Désactivé par défaut : les sirènes sont en lecture seule. Activé, leurs boutons « Déclencher la sirène » et « Arrêter la sirène » fonctionnent."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_alarm_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow changing the homee mode from Gladys",
+        "fr": "Autoriser le changement de mode du homee depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: the mode of the box (home, sleeping, away, vacation), which your homeegrams may use to arm an alarm, is read-only. On, it can be chosen from a list. The INOVA alarm is always read-only.",
+        "fr": "Désactivé par défaut : le mode de la box (à la maison, nuit, absent, vacances), que vos homeegrammes peuvent utiliser pour armer une alarme, est en lecture seule. Activé, il peut être choisi dans une liste. L'alarme INOVA reste toujours en lecture seule."
+      },
+      "required": false,
+      "default": false
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
-      "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "timeout_seconds": 60
     }
   ]
 }

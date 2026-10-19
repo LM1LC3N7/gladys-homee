@@ -16,8 +16,8 @@ its only runtime dependency. It started from the official JavaScript template.
 ```bash
 npm install
 npm test                                  # node --test, the built-in runner
-node --test test/devices.test.js          # one file
-node --test --test-name-pattern "plug"    # tests whose name matches
+node --test test/mapping.test.js          # one file
+node --test --test-name-pattern "lock"    # tests whose name matches
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run format                            # Prettier, fix in place
@@ -31,29 +31,66 @@ pushing.
 ## Architecture
 
 ```
-index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
-src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+index.js                          SDK wiring only (src/handlers.js registers before connect())
+src/app.js                        HomeeApp: lifecycle, token, messages, commands, badges
+src/homee.js                      the token request (POST /access_token, node:http, errors by kind)
+src/live.js                       ws://<box>:7681/connection, subprotocol v2, the messages
+src/nodes.js                      the JSON of the box -> nodes and attributes (pure)
+src/mapping.js                    one node -> features, readers, writers (pure), the safety kinds
+src/devices.js                    nodes -> Gladys devices + routing tables (pure), no lost feature
+src/publisher.js                  states within 300/min, sensor throttling
+src/store.js                      /data/state.json: refused credentials (fingerprint), 429 pause
+src/config.js                     DEFAULTS (mirrors the manifest defaults) + normalization
+src/i18n.js                       texts in English and French
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, against the SDK's fake Gladys, a fake box and a
+                                  simulated box on 127.0.0.1 (never the network)
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
+
+## Safety rules of this integration
+
+- A plug, a heating, a lock, a door or gate, a valve, a siren or the alarm
+  never gets a `switch`/`light` binary feature: "turn everything off" (Google
+  Home, Alexa, HomeKit, MCP, scenes) must never reach them. Their state is
+  read-only (`unknown/binary`, `lock/state`, `siren/binary`…) and their
+  commands are `button/push` features (a `text/select` for the homee mode).
+- Each such command has a `kind` whose option (`allow_*_control`) is off by
+  default; only `true` allows it. The option is checked when the command
+  arrives, when it gets its turn and just before the PUT leaves.
+- A sensitive command is decided on the attribute read just before
+  (`GET:nodes/<n>/attributes/<a>`), never on the memory; refused when that
+  read does not come, the attribute or the node is unavailable, the value is
+  unknown or moving. Its echo is awaited: without it, "sent, without
+  confirmation", never "not sent".
+- Locks, doors and valves are guarded after a command until they report the
+  state asked for (never lifted on the start state without a move seen, nor
+  on an unknown value); impulses for 10 s.
+- Hot water setpoint ≤ `water_heater_max` (55 °C by default), never above
+  60 °C. Radiator valves are never commanded.
+- Refused credentials: stopped, persisted, retried spaced (1 h doubling to
+  24 h); never a loop. A token refused by the socket is renewed at most once
+  per (spaced) try, and not when it is younger than two minutes.
+- A reconnection to Gladys (`connected`) must not clear a 429 pause, a
+  refusal, the token nor the socket (`app.resume`); it publishes the status,
+  the Discovery and the badges again.
+- Never log the password, the token, nor the websocket URL (it holds the
+  token). The store keeps a salted scrypt fingerprint, never the credentials.
 
 ## Rules
 
 - **External ids are forever.** Build them with
   `gladys.externalIds(type, platformId)`, `platformId` being the unique id the
-  platform gives the device (serial, cloud id, MAC), never a label. Gladys keys
-  devices, their history, scenes and dashboards on them: changing one creates a
-  new device and orphans the old one. The same goes for every key users store:
-  manifest `config_schema`, `actions`, widget and scene keys, feature keys.
+  platform gives the device (here `<box uid>-<node id>`), never a label.
+  Gladys keys devices, their history, scenes and dashboards on them:
+  changing one creates a new device and orphans the old one. The same goes
+  for every key users store: manifest `config_schema`, `actions`, feature
+  keys (`a<attribute id>[-<command>]`).
+- **No lost feature.** A device republished keeps the features of the device
+  created in Gladys (`gladys.devices`) that a new build lacks.
 - **The container rootfs is read-only.** Write only under `/data`, the one
-  writable volume. Never log tokens, passwords or API keys.
+  writable volume.
 - **Versions belong to the Release workflow** (Actions → Release). Never edit
   `version` in `package.json` or in the manifest, nor the `docker_image` tag,
   by hand — except on the README's hand-pushed tag path, which bumps all three
@@ -64,12 +101,12 @@ test/                             node --test, against the SDK's fake Gladys (in
   becomes the notes of the GitHub Release.
 - **Manifest.** Texts are multi-language objects `{ "en": ..., "fr": ... }`:
   `label`, `description` and `placeholder` alike, never a plain string. The
-  catalog `description` holds 10 to 100 characters per language. A field the
-  older cores do not know needs a higher `gladys_version` minimum
-  (`categories`: 4.86.0; `widgets`, `scene_triggers`, `scene_actions`,
-  `type: "provider"`: 5.1.0). `test/manifest.test.js` ties the manifest to the
-  code (defaults, action, scene and widget handlers): change both sides
-  together.
+  catalog `description` holds 10 to 100 characters per language.
+  `test/manifest.test.js` ties the manifest to the code: change both sides
+  together. A `secret` field is never said to be encrypted: Gladys keeps it
+  in clear in its database.
+- **Units**: only those the core lists for the category
+  (`DEVICE_FEATURE_UNITS_BY_CATEGORY` of `server/utils/constants.js`).
 - **User-facing text** is bilingual (English and French): action messages,
   manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,

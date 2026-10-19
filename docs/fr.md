@@ -1,67 +1,109 @@
-# Template de démonstration
+# homee
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Cette intégration relie votre box **homee** (Z-Wave, Zigbee, EnOcean, selon
+ses cubes) à Gladys Assistant, en local : les appareils appairés à la box
+deviennent des appareils Gladys, leurs états suivent la box en direct et
+Gladys les pilote à travers elle.
 
-## Ce que vous obtenez
+> Intégration non officielle, sans lien avec homee GmbH. Elle n'a **jamais été
+> testée avec un vrai homee** : elle a été écrite d'après la bibliothèque
+> pyHomee et l'intégration homee de Home Assistant, et testée contre une box
+> simulée. Vos retours sont les bienvenus.
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+## Ce qui est pris en charge
+
+- **Lumières** : marche/arrêt, luminosité, température de couleur.
+- **Interrupteurs** (relais muraux) : marche/arrêt, variateur.
+- **Prises** : état, puissance, énergie (index cumulatif), et des boutons
+  « Allumer » / « Éteindre » derrière une option (voir plus bas).
+- **Volets roulants** : ouvrir, fermer, arrêter, position.
+- **Thermostats et têtes thermostatiques** : température, consigne, ouverture
+  de la vanne, batterie, mode de chauffage (lecture).
+- **Eau chaude** : température, consigne (plafonnée).
+- **Capteurs** : ouverture, fenêtre, mouvement, présence, fuite et inondation,
+  fumée, monoxyde de carbone, sabotage, batterie faible, température,
+  humidité, luminosité, CO2, UV, vent, pluie, courant, tension.
+- **Serrures, portes de garage, portails, moteurs de fenêtre, relais à
+  impulsion, vannes d'eau, sirènes, mode du homee** : état en lecture seule,
+  et des boutons (ou une liste pour le mode) qui ne fonctionnent que si vous
+  les autorisez.
+- Les télécommandes et boutons muraux (appuis), les homeegrammes et l'alarme
+  INOVA ne sont pas encore repris.
 
 ## Configuration
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+1. Dans l'app homee, créez de préférence un **utilisateur dédié** à Gladys.
+2. Notez l'**adresse IP locale** de la box (Réglages → homee, ou votre box
+   internet). Donnez-lui une adresse fixe.
+3. Dans Gladys, Intégrations → homee : saisissez l'adresse IP, le nom
+   d'utilisateur et le mot de passe, puis **Tester la connexion**.
+4. Dans l'onglet **Découverte**, ajoutez les appareils voulus.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Le mot de passe est un champ secret : il est gardé par Gladys dans sa base,
+jamais réaffiché, et envoyé seulement à votre homee (sous la forme de son
+empreinte SHA-512, comme le font les apps homee). L'intégration n'utilise que
+la connexion locale de la box (port 7681), jamais my.hom.ee.
 
-## Actions
+## Sécurité : ce qui reste en lecture seule
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+Un « tout éteindre » (Google Home, Alexa, HomeKit, MCP, une scène) ne doit
+jamais atteindre une vanne, une serrure, une sirène, un chauffage ni la charge
+inconnue d'une prise. Ces appareils n'ont donc **jamais d'interrupteur** dans
+Gladys : leur état est en lecture seule et leurs commandes sont des boutons,
+refusés tant que l'option correspondante est désactivée (toutes le sont par
+défaut) :
 
-## Scènes
+| Option                                       | Ce qu'elle autorise                                                                   |
+| -------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Autoriser le pilotage des prises             | Boutons Allumer / Éteindre des prises                                                 |
+| Autoriser le pilotage du chauffage           | Consignes des thermostats et de l'eau chaude, marche/arrêt des radiateurs électriques |
+| Autoriser le pilotage des serrures           | Verrouiller, Déverrouiller, Ouvrir (tirer le pêne)                                    |
+| Autoriser le pilotage des portes et portails | Ouvrir, Fermer, Arrêter, impulsions                                                   |
+| Autoriser le pilotage des vannes             | Ouvrir / Fermer les vannes d'eau                                                      |
+| Autoriser le pilotage des sirènes            | Déclencher / Arrêter la sirène                                                        |
+| Autoriser le changement de mode du homee     | À la maison, Nuit, Absent, Vacances (une liste)                                       |
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+Pour chacune de ces commandes, l'intégration relit l'état de l'appareil juste
+avant, refuse si cet état est inconnu ou en mouvement, vérifie l'option une
+dernière fois juste avant l'envoi, et attend que la box confirme. Sans
+confirmation dans les temps, Gladys affiche « Commande envoyée, sans
+confirmation du homee » : vérifiez l'appareil. Une serrure, une porte ou une
+vanne est ensuite protégée jusqu'à ce qu'elle signale l'état demandé (30 s,
+90 s ou 60 s au plus). Une commande qui ne peut pas partir dans les 3,5 s est
+refusée, jamais envoyée en retard.
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+La consigne d'eau chaude est plafonnée à **55 °C** par défaut (risque de
+brûlure), réglable jusqu'à **60 °C** au plus. Les vannes des têtes
+thermostatiques ne sont jamais pilotées directement : elles suivent leur
+consigne.
 
-## Tableau de bord
+## Connexion et erreurs
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+- Un jeton est demandé à la box à la connexion et gardé en mémoire seulement ;
+  il est renouvelé avant sa fin, jamais en boucle.
+- La connexion en direct perdue est rouverte après 5 s, puis 10 s, 20 s…
+  jusqu'à 5 minutes entre deux essais. Toute la box est relue toutes les
+  10 minutes ; sans réponse en 30 s, la connexion est rouverte.
+- **Identifiants refusés** : l'intégration s'arrête et le note dans `/data`
+  (sans le nom d'utilisateur ni le mot de passe, seulement une empreinte
+  salée). Nouvel essai automatique après 1 h, puis 2 h, 4 h… jusqu'à 24 h ;
+  « Tester la connexion » ou un enregistrement de la configuration essaie
+  aussitôt.
+- Si la box demande de ralentir (HTTP 429), l'intégration fait une pause
+  (1 minute à 6 heures), gardée même après un redémarrage.
 
-## Dépannage
+## Limites connues
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+- Jamais testée avec un vrai homee (voir plus haut) : les profils et la
+  signification de certaines valeurs viennent de pyHomee et de Home
+  Assistant.
+- Les noms des fonctionnalités sont fixés à l'ajout de l'appareil.
+- Les appuis des télécommandes, les homeegrammes, les groupes et l'alarme
+  INOVA ne sont pas encore pris en charge.
+
+## Crédits
+
+- [pyHomee](https://github.com/Taraman17/pyHomee) (MIT), la bibliothèque de
+  l'intégration homee de Home Assistant, dont le protocole est repris.
+- L'intégration homee de [Home Assistant](https://github.com/home-assistant/core)
+  (Apache-2.0), pour la signification des profils et des valeurs.
