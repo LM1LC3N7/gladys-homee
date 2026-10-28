@@ -481,6 +481,28 @@ test('energy index: a drop or a jump is held, shown on the badge, the last value
   assert.equal(store.indexState(id).held, null);
 });
 
+test('accept the held index: a second click never takes a drop lower than the one listed', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const plug = await created(gladys, 'Prise congélateur');
+  const id = `${plug.external_id}:a123`;
+  await tick(TIMINGS.flushInterval);
+  box.emit(123, 12);
+  await tick(TIMINGS.flushInterval * 11);
+  assert.equal(gladys.fake.lastState(id), 312.4, 'a drop held');
+  let answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
+  assert.match(answer.data.message.en, /^Nothing taken yet\. Held back: .*312\.4 to 12 kWh/);
+  box.emit(123, 5);
+  await tick(TIMINGS.flushInterval * 11);
+  answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
+  assert.match(answer.data.message.en, /^Nothing taken yet\. Held back: .*312\.4 to 5 kWh/);
+  await tick(TIMINGS.flushInterval * 11);
+  assert.equal(gladys.fake.lastState(id), 312.4, 'never 5 kWh without a click');
+  answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, { device: plug.external_id });
+  assert.match(answer.data.message.en, /^Accepted/);
+  await tick(TIMINGS.flushInterval * 11);
+  assert.equal(gladys.fake.lastState(id), 5, 'the value listed, accepted');
+});
+
 test('accept the held index: bounded to the device chosen and the value shown, kWh told', async (t) => {
   const { gladys, box, tick } = await setup(t);
   const plug = await created(gladys, 'Prise congélateur');

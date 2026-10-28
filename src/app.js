@@ -1319,7 +1319,7 @@ export class HomeeApp {
     const now = this.now();
     // The second click never counts more than what was listed: each value
     // held must still be the one listed, plus what the device may have drawn
-    // since (a jump not below it, a drop not above it plus that margin).
+    // since (never below it, never above it plus that margin, a jump or a drop).
     const margin = (since) =>
       (INDEX_MAX_KW * Math.max(0, now - since)) / 3_600_000 + INDEX_SLACK_KWH;
     const asListed = (h) => {
@@ -1328,7 +1328,8 @@ export class HomeeApp {
         return false;
       }
       const top = listed.to + margin(listed.at);
-      return h.direction === 'up' ? h.to >= listed.to && h.to <= top : h.to <= top;
+      // Both ways a floor: a value lower than the one listed is a first click again.
+      return h.to >= listed.to && h.to <= top;
     };
     if (
       !pending ||
