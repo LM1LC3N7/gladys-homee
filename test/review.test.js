@@ -385,6 +385,24 @@ test('hot water: a lower max of the homee attribute wins over the 65 °C ceiling
   );
 });
 
+test('hot water: the value rounded to the step of the attribute never goes above the ceiling', () => {
+  // min 30.5, step 1: 65 is rounded up to 65.5 by the step. Only the guard on the
+  // value actually sent (after the step) stops it.
+  const n = nodeOf(
+    node(63, 'ECS', 3029, [
+      attr(631, 63, 6, 50, { min: 30.5, max: 70, step: 1, unit: '%C2%B0C', editable: 1 }),
+    ]),
+  );
+  const m = mapNode(n, { language: 'fr' });
+  const plan = (value, waterHeaterMax) =>
+    m.writers.a631.plan(n.attributes.get(631), value, { waterHeaterMax });
+  assert.equal(m.features.find((x) => x.key === 'a631').max, 65);
+  assert.throws(() => plan(65, 65), /tooHot/, '65 would be sent as 65.5');
+  assert.equal(plan(64, 65).target, 64.5);
+  assert.throws(() => plan(60, 60), /tooHot/, 'a lower ceiling: 60 would be sent as 60.5');
+  assert.equal(plan(59, 60).target, 59.5);
+});
+
 // --- B2: switchable binaries --------------------------------------------------------
 
 /** Every NodeProfile of pyHomee 1.4.6 (const.py). */
