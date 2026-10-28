@@ -27,8 +27,8 @@ export const LANGUAGES = ['fr', 'en'];
 
 /** Bounds of the number fields, mirrored by the manifest. */
 export const SENSOR_INTERVAL = { min: 0, max: 300, default: 10 };
-/** The hot water setpoint ceiling (°C): 55 by default, never above 60. */
-export const WATER_HEATER_MAX = { min: 40, max: 60, default: 55 };
+/** The hot water setpoint ceiling (°C): 65 by default, never above 65 (a lower attribute max wins). */
+export const WATER_HEATER_MAX = { min: 40, max: 65, default: 65 };
 
 /** The local API of the box (pyHomee: `http://<host>:7681`, `ws://<host>:7681`). */
 export const HOMEE = {

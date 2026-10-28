@@ -161,12 +161,13 @@ up to date at the end of every milestone.
   until the device reports a state (review M1). Impulses: two presses within
   2 s are one bounce, the second refused (review M3); the press after is
   sent (often the stop of a gate).
-- **Hot water**: `water_heater_max` 40–60, 55 by default; a setpoint above it
-  is refused (never clamped up), the slider stops at 60. Every setpoint of a
+- **Hot water**: `water_heater_max` 40–65, 65 by default (Louis, 2026-10-28,
+  was 40–60, 55); a setpoint above it is refused (never clamped up), the
+  slider stops at 65 or at the lower max of the attribute. Every setpoint of a
   warm water circuit (3029), `TARGET_TEMPERATURE` included, is hot water
   (review I5).
 - **Setpoints** (review I5): refused outside the minimum and maximum
-  published (the slider: −10…40 °C for heating, 0…60 °C for hot water, and
+  published (the slider: −10…40 °C for heating, 0…65 °C for hot water, and
   the range of the attribute); rounded to its step; °F attributes converted.
   Heating mode read only in M1.
 - **Covers**: homee position 0 open … 100 closed, Gladys the percentage open;

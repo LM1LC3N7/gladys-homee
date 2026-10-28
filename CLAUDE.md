@@ -78,8 +78,8 @@ test/                             node --test, against the SDK's fake Gladys, a 
 - Nothing blocks a device after a command: locks, doors and valves await
   the state asked for, a "state not confirmed" badge until a state is
   reported; two presses of an impulse within 2 s are one.
-- Hot water setpoint ≤ `water_heater_max` (55 °C by default), never above
-  60 °C. Radiator valves are never commanded.
+- Hot water setpoint ≤ `water_heater_max` (65 °C by default), never above
+  65 °C, and never above the max of the homee attribute when it is lower. Radiator valves are never commanded.
 - Refused credentials: stopped, persisted, retried spaced (1 h doubling to
   24 h); never a loop. A token refused by the socket is renewed at most once
   per (spaced) try, and not when it is younger than two minutes.

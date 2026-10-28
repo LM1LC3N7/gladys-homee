@@ -139,7 +139,7 @@ test('the configuration matches the code; every sensitive option is off by defau
   );
   assert.deepEqual(
     [fields.water_heater_max.min, fields.water_heater_max.max, fields.water_heater_max.default],
-    [WATER_HEATER_MAX.min, 60, 55],
+    [WATER_HEATER_MAX.min, 65, 65],
   );
   for (const key of [
     'allow_plug_control',

@@ -170,7 +170,9 @@ test('plans decided on the fresh attribute: lock, door, hot water, mode', () => 
   const tank = mapped(17).writers.a172;
   const tankAttr = nodes.get(17).attributes.get(172);
   assert.throws(() => tank.plan(tankAttr, 56, { waterHeaterMax: 55 }), /tooHot/);
-  assert.throws(() => tank.plan(tankAttr, 61, { waterHeaterMax: 90 }), /tooHot/);
+  assert.throws(() => tank.plan(tankAttr, 65.5, { waterHeaterMax: 90 }), /tooHot|outOfRange/);
+  assert.throws(() => tank.plan(tankAttr, 65.5, { waterHeaterMax: 65 }), /tooHot/);
+  assert.equal(tank.plan(tankAttr, 65, { waterHeaterMax: 65 }).target, 65);
   assert.equal(tank.plan(tankAttr, 55, { waterHeaterMax: 55 }).target, 55);
   assert.throws(() => tank.plan(tankAttr, '', { waterHeaterMax: 55 }), /badValue/);
   assert.throws(() => tank.plan(tankAttr, null, { waterHeaterMax: 55 }), /badValue/);

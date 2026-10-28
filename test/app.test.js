@@ -295,24 +295,28 @@ test('a garage door: refused while moving, stop allowed then', async (t) => {
   assert.deepEqual(box.puts.at(-1), { node: 14, attr: 141, value: 0 });
 });
 
-test('setpoints: heating stepped, hot water capped at 55 °C by default and never above 60 °C', async (t) => {
+test('setpoints: heating stepped, hot water capped at 65 °C by default and never above 65 °C', async (t) => {
   const { gladys, app, box, tick } = await setup(t, ALLOW_ALL);
   const radiator = await created(gladys, 'Radiateur chambre');
   const tank = await created(gladys, "Ballon d'eau chaude");
   let ack = await command(gladys, tick, radiator, 'a162', 21.3);
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(box.puts.at(-1), { node: 16, attr: 162, value: 21.5 });
-  ack = await command(gladys, tick, tank, 'a172', 58);
+  ack = await command(gladys, tick, tank, 'a172', 65.5);
   assert.equal(ack.error, T.denied.tooHot.fr);
-  ack = await command(gladys, tick, tank, 'a172', 52);
+  ack = await command(gladys, tick, tank, 'a172', 65);
   assert.equal(ack.success, true, ack.error);
-  assert.deepEqual(box.puts.at(-1), { node: 17, attr: 172, value: 52 });
+  assert.deepEqual(box.puts.at(-1), { node: 17, attr: 172, value: 65 });
   await app.configUpdated({ ...ALLOW_ALL, water_heater_max: 90 });
   await settle();
-  assert.equal(app.config.waterHeaterMax, 60);
-  ack = await command(gladys, tick, tank, 'a172', 61);
+  assert.equal(app.config.waterHeaterMax, 65);
+  ack = await command(gladys, tick, tank, 'a172', 66);
   assert.equal(ack.error, T.denied.tooHot.fr);
-  assert.equal(featureOf(tank, 'a172').max, 60);
+  assert.equal(featureOf(tank, 'a172').max, 65);
+  await app.configUpdated({ ...ALLOW_ALL, water_heater_max: 50 });
+  await settle();
+  ack = await command(gladys, tick, tank, 'a172', 52);
+  assert.equal(ack.error, T.denied.tooHot.fr);
 });
 
 test('the homee mode: a list behind its option, never a switch', async (t) => {

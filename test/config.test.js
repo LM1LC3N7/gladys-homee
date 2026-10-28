@@ -22,7 +22,7 @@ test('the configuration: required fields, bounds, sensitive options only on true
   assert.equal(c.error, undefined);
   assert.equal(c.username, 'u');
   assert.equal(c.password, ' p ', 'a password is taken as typed');
-  assert.equal(c.waterHeaterMax, 55);
+  assert.equal(c.waterHeaterMax, 65);
   for (const key of [
     'allowPlug',
     'allowHeating',
@@ -37,9 +37,10 @@ test('the configuration: required fields, bounds, sensitive options only on true
   assert.equal(normalizeConfig({ allow_lock_control: 'yes' }).allowLock, false);
   assert.equal(normalizeConfig({ allow_lock_control: 1 }).allowLock, false);
   assert.equal(normalizeConfig({ allow_lock_control: true }).allowLock, true);
-  assert.equal(normalizeConfig({ water_heater_max: 90 }).waterHeaterMax, 60);
+  assert.equal(normalizeConfig({ water_heater_max: 90 }).waterHeaterMax, 65);
+  assert.equal(normalizeConfig({ water_heater_max: 65.5 }).waterHeaterMax, 65);
   assert.equal(normalizeConfig({ water_heater_max: 20 }).waterHeaterMax, 40);
-  assert.equal(normalizeConfig({ water_heater_max: true }).waterHeaterMax, 55);
+  assert.equal(normalizeConfig({ water_heater_max: true }).waterHeaterMax, 65);
   assert.equal(normalizeConfig({ sensor_interval: 'x' }).sensorInterval, 10);
   assert.equal(normalizeConfig({ language: 'de' }).language, 'fr');
 });

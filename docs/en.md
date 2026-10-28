@@ -83,9 +83,9 @@ an impulse button less than 2 s apart count as one. A door whose direction
 Open / Close. A command that cannot leave within 3.5 s is refused, never sent
 late.
 
-The hot water setpoint is capped at **55 °C** by default (scalding risk),
-adjustable up to **60 °C** at most, the setpoint of a warm water circuit
-included. Any setpoint outside the range shown in Gladys is refused. The
+The hot water setpoint is capped at **65 °C** by default (scalding risk),
+adjustable down, **65 °C** at most, the setpoint of a warm water circuit
+included. A lower maximum reported by the device still applies. Any setpoint outside the range shown in Gladys is refused. The
 valves of radiator heads are never controlled directly: they follow their
 setpoint. On an on/off water valve, the meaning of "on" (open or closed) is
 still to be checked on a real box: the buttons are therefore named "Turn on"

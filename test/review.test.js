@@ -347,7 +347,7 @@ test('H1 a setpoint outside the published range (40 °C) is refused', () => {
   assert.equal(m.writers.a601.plan(n.attributes.get(601), 35, { waterHeaterMax: 55 }).target, 35);
 });
 
-test('H2 a TARGET_TEMPERATURE of a warm water circuit is hot water: 55/60 °C cap', () => {
+test('H2 a TARGET_TEMPERATURE of a warm water circuit is hot water: 65 °C cap', () => {
   const n = nodeOf(
     node(61, 'ECS', 3029, [
       attr(611, 61, 6, 50, { min: 30, max: 70, unit: '%C2%B0C', editable: 1 }),
@@ -360,8 +360,28 @@ test('H2 a TARGET_TEMPERATURE of a warm water circuit is hot water: 55/60 °C ca
     /tooHot/,
   );
   assert.throws(
-    () => m.writers.a611.plan(n.attributes.get(611), 61, { waterHeaterMax: 90 }),
+    () => m.writers.a611.plan(n.attributes.get(611), 65.5, { waterHeaterMax: 90 }),
     /outOfRange|tooHot/,
+  );
+  assert.equal(m.writers.a611.plan(n.attributes.get(611), 65, { waterHeaterMax: 65 }).target, 65);
+  assert.throws(
+    () => m.writers.a611.plan(n.attributes.get(611), 65.5, { waterHeaterMax: 65 }),
+    /tooHot/,
+  );
+});
+
+test('hot water: a lower max of the homee attribute wins over the 65 °C ceiling', () => {
+  const n = nodeOf(
+    node(62, 'ECS', 3029, [
+      attr(621, 62, 6, 50, { min: 30, max: 60, unit: '%C2%B0C', editable: 1 }),
+    ]),
+  );
+  const m = mapNode(n, { language: 'fr' });
+  assert.equal(m.features.find((x) => x.key === 'a621').max, 60);
+  assert.equal(m.writers.a621.plan(n.attributes.get(621), 60, { waterHeaterMax: 65 }).target, 60);
+  assert.throws(
+    () => m.writers.a621.plan(n.attributes.get(621), 62, { waterHeaterMax: 65 }),
+    /outOfRange/,
   );
 });
 

@@ -136,13 +136,13 @@
         "fr": "Consigne d'eau chaude la plus haute (°C)"
       },
       "description": {
-        "en": "A hot water setpoint above it is refused (scalding risk): 55 °C by default, 60 °C at most.",
-        "fr": "Une consigne d'eau chaude au-dessus est refusée (risque de brûlure) : 55 °C par défaut, 60 °C au plus."
+        "en": "A hot water setpoint above it is refused (scalding risk): 65 °C by default, 65 °C at most; a lower limit of the device still applies.",
+        "fr": "Une consigne d'eau chaude au-dessus est refusée (risque de brûlure) : 65 °C par défaut, 65 °C au plus ; une limite plus basse de l'appareil s'applique toujours."
       },
       "required": false,
-      "default": 55,
+      "default": 65,
       "min": 40,
-      "max": 60
+      "max": 65
     },
     {
       "key": "allow_lock_control",

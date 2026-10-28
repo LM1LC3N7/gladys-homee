@@ -86,9 +86,10 @@ d'impulsion à moins de 2 s comptent pour un seul. Une porte dont le sens
 Ouvrir / Fermer. Une commande qui ne peut pas partir dans les 3,5 s est
 refusée, jamais envoyée en retard.
 
-La consigne d'eau chaude est plafonnée à **55 °C** par défaut (risque de
-brûlure), réglable jusqu'à **60 °C** au plus, y compris la consigne d'un
-circuit d'eau chaude. Toute consigne hors de la plage affichée dans Gladys
+La consigne d'eau chaude est plafonnée à **65 °C** par défaut (risque de
+brûlure), réglable plus bas, **65 °C** au plus, y compris la consigne d'un
+circuit d'eau chaude. Un maximum plus bas annoncé par l'appareil s'applique
+toujours. Toute consigne hors de la plage affichée dans Gladys
 est refusée. Les vannes des têtes thermostatiques ne sont jamais pilotées
 directement : elles suivent leur consigne. Sur une vanne d'eau à marche/arrêt,
 le sens de « marche » (ouverte ou fermée) reste à vérifier sur une vraie box :

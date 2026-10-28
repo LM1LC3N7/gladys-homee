@@ -347,8 +347,8 @@ export const T = {
       fr: "Refusé : une commande est déjà en cours sur cet appareil ; attendez qu'il signale son nouvel état.",
     },
     tooHot: {
-      en: 'Refused: this hot water setpoint is above the ceiling set in the configuration (55 °C by default, never above 60 °C).',
-      fr: "Refusé : cette consigne d'eau chaude dépasse le plafond réglé dans la configuration (55 °C par défaut, jamais plus de 60 °C).",
+      en: 'Refused: this hot water setpoint is above the ceiling set in the configuration (65 °C by default, never above 65 °C, or the lower limit of the device).',
+      fr: "Refusé : cette consigne d'eau chaude dépasse le plafond réglé dans la configuration (65 °C par défaut, jamais plus de 65 °C, ou la limite plus basse de l'appareil).",
     },
     paused: {
       en: 'Refused: the homee asked to slow down, the integration is paused.',
